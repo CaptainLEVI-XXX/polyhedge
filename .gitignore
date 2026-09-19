@@ -4,8 +4,9 @@
 .env.*.local
 
 # internal working documents — not part of the product
-docs/superpowers/
+docs/
 polyhedge.md
+.superpowers/
 
 # build + deps
 node_modules/
