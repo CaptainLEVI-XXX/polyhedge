@@ -1,0 +1,14 @@
+{
+  "name": "polyhedge",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc -b" },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.1",
+    "fast-check": "^4.10.1",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  }
+}
