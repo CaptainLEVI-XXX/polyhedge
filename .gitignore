@@ -1,0 +1,19 @@
+# secrets
+.env
+.env.local
+.env.*.local
+
+# internal working documents — not part of the product
+docs/superpowers/
+polyhedge.md
+
+# build + deps
+node_modules/
+dist/
+*.tsbuildinfo
+
+# runtime artifacts
+snapshots/
+last-quote.json
+
+.DS_Store
