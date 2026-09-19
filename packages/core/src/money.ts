@@ -17,7 +17,10 @@ export function cents(n: number): Cents {
 }
 
 export function dollarsToCents(d: number): Cents {
-  return cents(roundHalfEven(d * 100));
+  // `d * 100` carries representation error that can hide a genuine half-cent
+  // tie, so banker's rounding never fires and the value silently rounds down.
+  // Snapping away sub-ULP noise first makes a true tie visible as one.
+  return cents(roundHalfEven(Number((d * 100).toFixed(9))));
 }
 
 export function centsToDollars(c: Cents): number {

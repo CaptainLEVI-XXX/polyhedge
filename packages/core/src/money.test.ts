@@ -28,6 +28,22 @@ describe('dollarsToCents', () => {
     // one share of fee is fractions of a cent; 100000 of them are not
     expect(dollarsToCents(0.0000168 * 100_000)).toBe(168);
   });
+  it('rounds a true half-cent tie to even despite float representation error', () => {
+    // 5.015 dollars is exactly 501.5 cents; 501 is odd, so banker's gives 502
+    expect(dollarsToCents(5.015)).toBe(502);
+    // 35.855 dollars is exactly 3585.5 cents; 3585 is odd, so banker's gives 3586
+    expect(dollarsToCents(35.855)).toBe(3586);
+  });
+
+  it('still rounds ties that do land on an exact float tie', () => {
+    expect(dollarsToCents(12.345)).toBe(1234);
+    expect(dollarsToCents(12.355)).toBe(1236);
+  });
+
+  it('is unaffected at large magnitudes', () => {
+    expect(dollarsToCents(1_000_000.005)).toBe(100_000_000);
+    expect(dollarsToCents(1_000_000.015)).toBe(100_000_002);
+  });
 });
 
 describe('priceMicros', () => {
