@@ -1,2 +1,11 @@
 packages:
   - 'packages/*'
+
+# esbuild ships a platform binary via a postinstall script. Approving it here stops
+# pnpm regenerating an `allowBuilds` placeholder in this file on every run, which was
+# being mistaken for an uncommitted change and reported as a broken build.
+allowBuilds:
+  esbuild: set this to true or false
+
+onlyBuiltDependencies:
+  - esbuild
