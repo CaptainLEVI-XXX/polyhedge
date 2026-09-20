@@ -26,6 +26,15 @@ importers:
 
   packages/core: {}
 
+  packages/engine:
+    dependencies:
+      '@polyhedge/core':
+        specifier: workspace:*
+        version: link:../core
+      '@polyhedge/venue':
+        specifier: workspace:*
+        version: link:../venue
+
   packages/venue:
     dependencies:
       '@polyhedge/core':
