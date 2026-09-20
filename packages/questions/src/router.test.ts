@@ -49,4 +49,18 @@ describe('route', () => {
     const atCap = route({ field }, policies, 2, 2);
     expect(atCap).toEqual({ kind: 'decline', field: 'field', reason: expect.any(String) });
   });
+
+  it('throws when a policy requires true/false against a choice/score answer, naming the field', () => {
+    const marketFit: Answer = {
+      kind: 'choice',
+      choice: 'strong',
+      probabilities: { strong: 0.6, weak: 0.4 },
+      confidence: 0.6,
+    };
+    const policies: Record<string, FieldPolicy> = {
+      marketFit: { required: 'true', onFail: 'decline', threshold: 0.5 },
+    };
+
+    expect(() => route({ marketFit }, policies, 0)).toThrow(/marketFit/);
+  });
 });

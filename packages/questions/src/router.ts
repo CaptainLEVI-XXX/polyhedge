@@ -36,7 +36,7 @@ interface Evaluation {
  * how far short it fell (used to pick the weakest field among follow-up
  * candidates).
  */
-function evaluate(answer: Answer, policy: FieldPolicy): Evaluation {
+function evaluate(field: string, answer: Answer, policy: FieldPolicy): Evaluation {
   if (answer.kind === 'boolean') {
     const p = answer.probability;
     if (policy.required === 'true') {
@@ -49,7 +49,16 @@ function evaluate(answer: Answer, policy: FieldPolicy): Evaluation {
     return { margin: Math.max(p, 1 - p) - policy.threshold };
   }
 
-  // choice / score: 'required' is 'any' in practice — confidence is what we have.
+  // choice / score have no true/false direction — only 'any' is meaningful.
+  // required:'true'/'false' against a non-boolean answer is a configuration
+  // mistake (it silently behaves like 'any' with no signal that anything is
+  // wrong), so it's rejected loudly instead.
+  if (policy.required !== 'any') {
+    throw new Error(
+      `route: field "${field}" has required:'${policy.required}' but its answer kind is '${answer.kind}' — only 'any' is valid for choice/score answers`,
+    );
+  }
+
   return { margin: answer.confidence - policy.threshold };
 }
 
@@ -78,7 +87,7 @@ export function route(
       continue;
     }
 
-    const { margin } = evaluate(answer, policy);
+    const { margin } = evaluate(field, answer, policy);
     if (margin >= 0) continue;
 
     if (policy.onFail === 'decline') {

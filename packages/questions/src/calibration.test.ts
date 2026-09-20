@@ -49,4 +49,39 @@ describe('calibrate', () => {
     expect(result.probability).toBeLessThan(answer.probability);
     expect(result.probability).toBeGreaterThan(0.5);
   });
+
+  it('rejects an invalid temperature instead of silently corrupting the answer (T=0 -> NaN, T<0 -> inverted distribution)', () => {
+    const answer: Answer = { kind: 'boolean', probability: 0.7 };
+    const zero: CalibrationMap = { version: 'test', temperature: { choice: 1, score: 1, boolean: 0 } };
+    const negative: CalibrationMap = { version: 'test', temperature: { choice: 1, score: 1, boolean: -1 } };
+
+    expect(() => calibrate(answer, zero)).toThrow(/boolean temperature.*got 0/);
+    expect(() => calibrate(answer, negative)).toThrow(/boolean temperature.*got -1/);
+  });
+
+  it('T > 1 on a score answer flattens probabilities AND recomputes score as their weighted mean', () => {
+    const answer: Answer = {
+      kind: 'score',
+      score: 2.6,
+      probabilities: { '1': 0.1, '2': 0.2, '3': 0.7 },
+      confidence: 0.7,
+    };
+    const map: CalibrationMap = { version: 'test', temperature: { choice: 1, score: 2, boolean: 1 } };
+
+    const result = calibrate(answer, map);
+
+    if (result.kind !== 'score') throw new Error('expected a score answer');
+    const sum = Object.values(result.probabilities).reduce((a, b) => a + b, 0);
+    const expectedScore = Object.entries(result.probabilities).reduce(
+      (total, [level, p]) => total + Number(level) * p,
+      0,
+    );
+
+    expect(sum).toBeCloseTo(1, 9);
+    expect(Math.max(...Object.values(result.probabilities))).toBeLessThan(
+      Math.max(...Object.values(answer.probabilities)),
+    );
+    expect(result.score).toBeCloseTo(expectedScore, 9);
+    expect(result.score).not.toBeCloseTo(answer.score, 2); // stale score would be wrong here
+  });
 });

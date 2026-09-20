@@ -39,6 +39,21 @@ export const IDENTITY_CALIBRATION: CalibrationMap = {
 // perturbing any real answer.
 const EPSILON = 1e-9;
 
+/**
+ * A malformed CalibrationMap is a configuration error, not routine input —
+ * this project's rule is that refusals are loud. T = 0 would divide logits
+ * by zero (NaN, which at least fails every downstream threshold); T < 0
+ * would flip the sign of every logit and INVERT the distribution while
+ * leaving it looking entirely plausible (still sums to 1, still has a
+ * "confidence"). Both are worse silent failures than a thrown error naming
+ * the bad value, so this is checked before any temperature is used.
+ */
+function checkTemperature(t: number, kind: string): void {
+  if (!Number.isFinite(t) || t <= 0) {
+    throw new Error(`calibrate: ${kind} temperature must be a finite number greater than 0, got ${t}`);
+  }
+}
+
 function softmax(logits: number[]): number[] {
   const max = Math.max(...logits);
   const exps = logits.map((logit) => Math.exp(logit - max));
@@ -73,8 +88,29 @@ function scaleProbability(p: number, temperature: number): number {
   return 1 / (1 + Math.exp(-logit));
 }
 
+/**
+ * A `score` answer's `score` field is the probability-weighted position
+ * over its ordered levels, so once calibration moves the probabilities the
+ * old `score` is stale and the two fields disagree. This recomputes it as
+ * Σ(level × p_level) against the NEW distribution. Keys of a score answer's
+ * `probabilities` are level-number strings; a key that doesn't parse as a
+ * number is a malformed answer, not something to skip over quietly.
+ */
+function weightedScore(probabilities: Record<string, number>): number {
+  let total = 0;
+  for (const [key, p] of Object.entries(probabilities)) {
+    const level = Number(key);
+    if (!Number.isFinite(level)) {
+      throw new Error(`calibrate: score probability key "${key}" is not a numeric level`);
+    }
+    total += level * p;
+  }
+  return total;
+}
+
 export function calibrate(answer: Answer, map: CalibrationMap): Answer {
   const temperature = map.temperature[answer.kind];
+  checkTemperature(temperature, answer.kind);
 
   // T === 1 is an exact identity, not an approximation: skip the
   // logit/softmax round trip entirely rather than relying on floating-point
@@ -88,7 +124,7 @@ export function calibrate(answer: Answer, map: CalibrationMap): Answer {
     }
     case 'score': {
       const { probabilities, confidence } = scaleDistribution(answer.probabilities, temperature);
-      return { kind: 'score', score: answer.score, probabilities, confidence };
+      return { kind: 'score', score: weightedScore(probabilities), probabilities, confidence };
     }
     case 'boolean': {
       return { kind: 'boolean', probability: scaleProbability(answer.probability, temperature) };
