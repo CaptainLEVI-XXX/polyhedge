@@ -44,28 +44,53 @@ export type RetrievalResult =
   | { kind: 'no_market_listed'; furthestListed: string | null; reason: string };
 
 const ET_MENTION = /\b(?:ET|EST|EDT|Eastern)\b/i;
-const EXPLICIT_TIME = /(\d{1,2}):(\d{2})/;
+const EXPLICIT_TIME = /\b(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?/gi;
 
 /**
  * Reads a time-of-day out of description prose ("...12:00 in the ET
- * timezone (noon)"). Requires an explicit ET/Eastern mention nearby — a
- * bare number or "noon" without a timezone marker is not something we can
- * read with certainty, so it returns null rather than assume ET.
+ * timezone (noon)"). Requires an explicit ET/Eastern mention — a bare
+ * number or "noon" without a timezone marker is not something we can read
+ * with certainty, so it returns null rather than assume ET.
+ *
+ * Every time the prose states is collected, not just the first one. A
+ * description mentioning two different times ("the 09:30 open ... resolves
+ * 16:00 ET") is ambiguous about which one settles the market, and taking
+ * whichever appeared first would hedge a plausible-looking wrong instant.
+ * Disagreement returns null; the caller then excludes the event, which is
+ * visible, where a wrong instant is not.
+ *
+ * 12-hour notation is read properly rather than taken at face value:
+ * "4:00 PM" is 16:00, not 04:00. Restating the same instant in words
+ * ("12:00 ... (noon)") agrees with itself and is not ambiguity.
  */
 function extractEtTime(description: string): { hour: number; minute: number } | null {
   if (!ET_MENTION.test(description)) return null;
 
-  const explicit = EXPLICIT_TIME.exec(description);
-  if (explicit) {
-    const hour = Number(explicit[1]);
-    const minute = Number(explicit[2]);
-    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour > 23 || minute > 59) return null;
-    return { hour, minute };
+  const found = new Set<number>();
+
+  for (const m of description.matchAll(EXPLICIT_TIME)) {
+    const hourRaw = Number(m[1]);
+    const minute = Number(m[2]);
+    const meridiem = m[3]?.[0]?.toLowerCase();
+    if (!Number.isInteger(hourRaw) || !Number.isInteger(minute) || minute > 59) return null;
+
+    let hour: number;
+    if (meridiem === undefined) {
+      if (hourRaw > 23) return null;
+      hour = hourRaw;
+    } else {
+      if (hourRaw < 1 || hourRaw > 12) return null;
+      hour = meridiem === 'p' ? (hourRaw === 12 ? 12 : hourRaw + 12) : (hourRaw === 12 ? 0 : hourRaw);
+    }
+    found.add(hour * 60 + minute);
   }
 
-  if (/\bnoon\b/i.test(description)) return { hour: 12, minute: 0 };
-  if (/\bmidnight\b/i.test(description)) return { hour: 0, minute: 0 };
-  return null;
+  if (/\bnoon\b/i.test(description)) found.add(12 * 60);
+  if (/\bmidnight\b/i.test(description)) found.add(0);
+
+  if (found.size !== 1) return null;
+  const minutes = [...found][0]!;
+  return { hour: Math.floor(minutes / 60), minute: minutes % 60 };
 }
 
 /**
@@ -118,15 +143,27 @@ export function parseObservationAt(description: string, endDateIso: string): str
  * a supported bracket series (selected by `seriesTickers`, never `tags` —
  * the tag also carries Up/Down, hit-price, meme-coin and person-vs-person
  * markets), `negRisk` is false, or the observation time cannot be parsed.
+ *
+ * Every bracket in this family settles off one observation of one price, so
+ * the event has a single observation instant. Rather than assume that and
+ * read it off `markets[0]`, every bracket's description is parsed and they
+ * must agree. A bracket whose prose we cannot read is passed over — one odd
+ * description should not discard an event we can otherwise place — but two
+ * brackets naming DIFFERENT instants means this is not the family we think
+ * it is, and the event is excluded.
  */
 export function indexEvent(event: GammaEvent, underlying: 'BTC' | 'ETH'): IndexedEvent | null {
   const seriesTicker = SUPPORTED_SERIES[underlying];
   if (!event.seriesTickers.includes(seriesTicker)) return null;
   if (!event.negRisk) return null;
 
-  const description = event.markets[0]?.description ?? '';
-  const observationAt = parseObservationAt(description, event.endDate);
-  if (observationAt === null) return null;
+  const observed = new Set<string>();
+  for (const market of event.markets) {
+    const at = parseObservationAt(market.description, event.endDate);
+    if (at !== null) observed.add(at);
+  }
+  if (observed.size !== 1) return null;
+  const observationAt = [...observed][0]!;
 
   return {
     eventId: event.id,

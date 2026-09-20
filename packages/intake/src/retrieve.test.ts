@@ -41,6 +41,20 @@ describe('parseObservationAt', () => {
     expect(parseObservationAt(NOON_ET_DESCRIPTION, '2026-09-26T00:00:00Z')).toBe('2026-09-26T16:00:00Z');
     expect(parseObservationAt(NOON_ET_DESCRIPTION, '2026-12-24T00:00:00Z')).toBe('2026-12-24T17:00:00Z');
   });
+
+  it('reads 12-hour notation as written rather than at face value', () => {
+    const pm = 'Resolves to the Binance close at 4:00 PM ET on the resolution date.';
+    expect(parseObservationAt(pm, '2026-09-26T00:00:00Z')).toBe('2026-09-26T20:00:00Z');
+
+    const am = 'Resolves to the Binance close at 12:00 AM ET (midnight) on the resolution date.';
+    expect(parseObservationAt(am, '2026-09-26T00:00:00Z')).toBe('2026-09-26T04:00:00Z');
+  });
+
+  it('returns null when the prose states two different times, rather than taking the first', () => {
+    const ambiguous =
+      'Prices are tracked from the 09:30 open. This market resolves to the close at 16:00 in the ET timezone.';
+    expect(parseObservationAt(ambiguous, '2026-09-26T00:00:00Z')).toBeNull();
+  });
 });
 
 describe('indexEvent', () => {
@@ -61,6 +75,21 @@ describe('indexEvent', () => {
   it('excludes an event whose description states no readable time, rather than defaulting', () => {
     const noTime = event({ markets: [market({ description: 'Resolves per the closing price.' })] });
     expect(indexEvent(noTime, 'BTC')).toBeNull();
+  });
+
+  it('excludes an event whose brackets name different observation instants, but tolerates one unreadable bracket', () => {
+    const disagreeing = event({
+      markets: [
+        market({ id: 'm1' }),
+        market({ id: 'm2', description: 'Resolves to the Binance close at 16:00 in the ET timezone.' }),
+      ],
+    });
+    expect(indexEvent(disagreeing, 'BTC')).toBeNull();
+
+    const oneUnreadable = event({
+      markets: [market({ id: 'm1' }), market({ id: 'm2', description: 'See the event rules.' })],
+    });
+    expect(indexEvent(oneUnreadable, 'BTC')?.observationAt).toBe('2026-09-26T16:00:00Z');
   });
 });
 
