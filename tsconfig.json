@@ -4,6 +4,7 @@
     { "path": "packages/core" },
     { "path": "packages/venue" },
     { "path": "packages/engine" },
-    { "path": "packages/intake" }
+    { "path": "packages/intake" },
+    { "path": "packages/questions" }
   ]
 }

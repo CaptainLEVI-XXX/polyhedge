@@ -44,9 +44,14 @@ importers:
       '@polyhedge/core':
         specifier: workspace:*
         version: link:../core
+      '@polyhedge/questions':
+        specifier: workspace:*
+        version: link:../questions
       '@polyhedge/venue':
         specifier: workspace:*
         version: link:../venue
+
+  packages/questions: {}
 
   packages/venue:
     dependencies:

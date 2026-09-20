@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@polyhedge/core": "workspace:*",
+    "@polyhedge/questions": "workspace:*",
     "@polyhedge/venue": "workspace:*"
   }
 }
