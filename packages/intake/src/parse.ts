@@ -1,18 +1,11 @@
 // Deterministic parsing layer: this file extracts number/date/asset CANDIDATES
 // with their surrounding context. It never assigns meaning (e.g. "this $40k is
 // the holding") — a later, model-driven task does that. Kept dependency-free
-// on purpose: no imports, not even from ./types.ts, so it can be tested and
-// reused in total isolation from the rest of the package graph.
+// on purpose: no external/runtime dependencies, only a type-only import of
+// the shared Parsed<T> shape (erased at compile time), so it can be tested
+// and reused without pulling in anything beyond the package itself.
 
-/** Matches shapes ../types.ts calls Provenance, without importing it. */
-type LocalProvenance = 'stated' | 'inferred';
-
-/** Structurally identical to Parsed<string> in ../types.ts. */
-interface ParsedDate {
-  value: string;
-  provenance: LocalProvenance;
-  raw: string;
-}
+import type { Parsed, Provenance } from './types.js';
 
 export interface NumberCandidate {
   value: number;
@@ -102,7 +95,7 @@ const DEADLINE_PATTERN = /\bby\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?
  * — `raw` stays the user's own words so a later confirmation question is
  * built from what they actually said, not from our guessed year.
  */
-export function parseDeadline(text: string, today: Date): ParsedDate | null {
+export function parseDeadline(text: string, today: Date): Parsed<string> | null {
   const match = DEADLINE_PATTERN.exec(text);
   if (!match) return null;
 
@@ -120,7 +113,7 @@ export function parseDeadline(text: string, today: Date): ParsedDate | null {
   const raw = `${monthText} ${dayText}`;
 
   let year: number;
-  let provenance: LocalProvenance;
+  let provenance: Provenance;
   if (yearText !== undefined) {
     year = Number(yearText);
     provenance = 'stated';
