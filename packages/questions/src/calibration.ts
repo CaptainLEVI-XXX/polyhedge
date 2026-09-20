@@ -26,7 +26,7 @@ export interface CalibrationMap {
 /**
  * Temperature 1 everywhere — an honest "not yet fitted".
  *
- * Stage 1 has no labelled data to fit a calibration curve against. Shipping
+ * The seed dataset is too small to establish a calibration curve. Shipping
  * a hand-picked temperature here would imply a fitted value that does not
  * exist; `version: 'unfitted'` makes that explicit instead of pretending.
  */

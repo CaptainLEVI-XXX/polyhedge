@@ -117,7 +117,7 @@ export const FIXED_FIELD_POLICIES: Record<string, FieldPolicy> = {
 export const ROLE_CONFIDENCE_THRESHOLD = 0.6;
 
 /**
- * Stage 1 hedges the whole stated loss. Nothing in the pipeline extracts a
+ * Intake hedges the whole stated loss. Nothing in the pipeline extracts a
  * ratio today, so this is a default — and a default that silently sizes the
  * user's position is an invented input, which is why every exposure built
  * here carries an assumption naming it in the user's own terms.

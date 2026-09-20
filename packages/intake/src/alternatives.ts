@@ -66,15 +66,14 @@ const CHEAPER_TAIL_COST_SHARE = 0.25;
 
 export interface Alternative {
   /**
-   * `perp` is reserved for Stage 3 — a perpetual-funding hedge is a
-   * different instrument with a different failure mode. Stage 1 never emits
-   * one, and there is deliberately no stub: an empty perp entry would read
+   * `perp` is reserved for a future instrument integration with different
+   * failure modes. This compiler never emits one. An empty entry would read
    * as "considered and rejected" when nothing considered it.
    */
   kind: 'shaped' | 'cheaper_tail' | 'perp';
   /** Plain English: what this trades away and what it buys. */
   reason: string;
-  /** A complete, executable, replayable record — Stage 2 executes whichever the user picks. */
+  /** A complete, executable, replayable record for the user's selected alternative. */
   record: QuoteRecord;
   /**
    * This alternative's payout re-measured against the PRIMARY's target.
