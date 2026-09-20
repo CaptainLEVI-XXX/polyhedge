@@ -50,13 +50,43 @@ describe('scanEvent', () => {
     expect(s.bracketsShortOfTarget).toBe(3); // t1 and t2 have no book at all
   });
 
-  it('reports the minimum cheap depth as the binding capacity', () => {
+  it('measures below-hedges per side, not across the whole ladder', () => {
     const books = new Map<string, ClobBook>([
-      ['t0', book([[100_000, 250]])],
-      ['t1', book([[200_000, 5000]])],
-      ['t2', book([[300_000, 9000]])],
+      ['t0', book([[100_000, 600], [120_000, 400]])],  // cheap depth 1000
+      ['t1', book([[200_000, 5000]])],                  // cheap depth 5000
+      ['t2', book([[300_000, 5000]])],                  // cheap depth 5000
     ]);
-    expect(scanEvent(event, books, 100).minPayoutAtOrBelowCapUsd).toBe(250);
+    const s = scanEvent(event, books, 100);
+    expect(s.belowHedges.map(h => [h.strike, h.bracketCount, h.capacityUsd]))
+      .toEqual([[68000, 1, 1000], [70000, 2, 1000]]);
+    expect(s.aboveHedges.map(h => [h.strike, h.bracketCount, h.capacityUsd]))
+      .toEqual([[68000, 2, 5000], [70000, 1, 5000]]);
+  });
+
+  it('ignores a single-bracket hedge when reporting best multi-bracket capacity', () => {
+    const books = new Map<string, ClobBook>([
+      ['t0', book([[100_000, 99_999]])],  // huge, but one bracket only
+      ['t1', book([[200_000, 40]])],
+      ['t2', book([[300_000, 40]])],
+    ]);
+    const s = scanEvent(event, books, 10);
+    // below@70000 spans 2 brackets -> min(99999, 40) = 40
+    // above@68000 spans 2 brackets -> min(40, 40) = 40
+    expect(s.bestMultiBracketCapacityUsd).toBe(40);
+  });
+
+  it('is not dragged to zero by an at-the-money bracket with no cheap depth', () => {
+    const books = new Map<string, ClobBook>([
+      ['t0', book([[10_000, 5000]])],      // 1c, cheap depth 5000
+      ['t1', book([[950_000, 5000]])],     // 95c at-the-money, cheap depth 0
+      ['t2', book([[20_000, 5000]])],      // 2c, cheap depth 5000
+    ]);
+    const s = scanEvent(event, books, 10);
+    // below@68000 needs only t0 -> 5000; above@70000 needs only t2 -> 5000
+    expect(s.belowHedges[0]!.capacityUsd).toBe(5000);
+    expect(s.aboveHedges[1]!.capacityUsd).toBe(5000);
+    // and the 2-bracket hedges are correctly capped by the 95c bracket
+    expect(s.bestMultiBracketCapacityUsd).toBe(0);
   });
 
   it('flags an event whose titles do not parse', () => {

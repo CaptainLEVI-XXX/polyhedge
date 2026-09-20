@@ -1,4 +1,4 @@
-import { parseBracketTitle, validateLadder, type ClobBook, type GammaEvent } from '@polyhedge/venue';
+import { parseBracketTitle, validateLadder, type Bracket, type ClobBook, type GammaEvent } from '@polyhedge/venue';
 
 /** Payout we ask each bracket to supply when testing capacity. */
 export const TARGET_PAYOUT_USD = 10_000;
@@ -23,14 +23,35 @@ export interface BracketDepth {
   avgPriceToBuyTarget: number | null;
 }
 
+/**
+ * Capacity of a one-sided threshold hedge struck at a bracket boundary.
+ *
+ * A "below K" hedge pays out in every bracket entirely below K, so it must
+ * buy the same payout in each of them, and the thinnest of those brackets
+ * caps the whole hedge. The at-the-money bracket is never bought, which is
+ * why capacity must be measured per side rather than across the ladder.
+ */
+export interface HedgeCapacity {
+  strike: number;
+  bracketCount: number;
+  /** Payout buyable at or below the cap in EVERY bracket this hedge needs. */
+  capacityUsd: number;
+  /** Cost to buy `capacityUsd` of payout in each of those brackets, with
+   *  fees. null when any of them has an unknown fee. */
+  costUsd: number | null;
+}
+
 export interface EventScan {
   eventId: string; slug: string; title: string; endDate: string; negRisk: boolean;
   parsed: boolean; validLadder: boolean; reason: string | null;
   brackets: BracketDepth[];
-  /** Binding cheap depth: the smallest payout-at-or-below-cap across
-   *  brackets. A threshold hedge needs the same payout in every losing
-   *  bracket, so the smallest one caps the hedge. */
-  minPayoutAtOrBelowCapUsd: number;
+  /** One entry per internal boundary, ascending by strike. */
+  belowHedges: HedgeCapacity[];
+  aboveHedges: HedgeCapacity[];
+  /** Largest capacity among hedges spanning at least two brackets, either
+   *  side. Single-bracket hedges are excluded because they are just one
+   *  market and say nothing about the ladder. 0 when none qualifies. */
+  bestMultiBracketCapacityUsd: number;
   /** How many brackets cannot supply TARGET_PAYOUT_USD at any price. */
   bracketsShortOfTarget: number;
   feeKnown: boolean;
@@ -91,10 +112,89 @@ export function scanEvent(
     };
   });
 
-  const minPayoutAtOrBelowCapUsd =
-    brackets.length === 0 ? 0 : Math.min(...brackets.map((b) => b.payoutAtOrBelowCapUsd));
-
   const bracketsShortOfTarget = brackets.filter((b) => b.costToBuyTargetUsd === null).length;
+
+  // Build hedges per side of each internal boundary
+  const belowHedges: HedgeCapacity[] = [];
+  const aboveHedges: HedgeCapacity[] = [];
+
+  // Extract strikes (distinct finite hi values, excluding the last bracket's null)
+  const strikeSet = new Set<number>();
+  for (const parsed of parsedBrackets) {
+    if (parsed !== null && parsed.hi !== null) {
+      strikeSet.add(parsed.hi);
+    }
+  }
+  const strikes = Array.from(strikeSet).sort((a, b) => a - b);
+
+  for (const strike of strikes) {
+    // Below hedges: all brackets where hi <= strike
+    const belowIndices: number[] = [];
+    for (let i = 0; i < parsedBrackets.length; i++) {
+      const parsed = parsedBrackets[i];
+      if (parsed !== null && parsed.hi !== null && parsed.hi <= strike) {
+        belowIndices.push(i);
+      }
+    }
+
+    if (belowIndices.length > 0) {
+      const capacityUsd = Math.min(
+        ...belowIndices.map((i) => brackets[i]!.payoutAtOrBelowCapUsd),
+      );
+      let costUsd = 0;
+      let hasNullCost = false;
+      for (const i of belowIndices) {
+        const cost = costToBuy(books.get(event.markets[i]!.yesTokenId), capacityUsd, event.markets[i]!.feeRate);
+        if (cost === null) {
+          hasNullCost = true;
+          break;
+        }
+        costUsd += cost.costUsd;
+      }
+      belowHedges.push({
+        strike,
+        bracketCount: belowIndices.length,
+        capacityUsd,
+        costUsd: hasNullCost ? null : costUsd,
+      });
+    }
+
+    // Above hedges: all brackets where lo >= strike
+    const aboveIndices: number[] = [];
+    for (let i = 0; i < parsedBrackets.length; i++) {
+      const parsed = parsedBrackets[i];
+      if (parsed !== null && parsed.lo !== null && parsed.lo >= strike) {
+        aboveIndices.push(i);
+      }
+    }
+
+    if (aboveIndices.length > 0) {
+      const capacityUsd = Math.min(
+        ...aboveIndices.map((i) => brackets[i]!.payoutAtOrBelowCapUsd),
+      );
+      let costUsd = 0;
+      let hasNullCost = false;
+      for (const i of aboveIndices) {
+        const cost = costToBuy(books.get(event.markets[i]!.yesTokenId), capacityUsd, event.markets[i]!.feeRate);
+        if (cost === null) {
+          hasNullCost = true;
+          break;
+        }
+        costUsd += cost.costUsd;
+      }
+      aboveHedges.push({
+        strike,
+        bracketCount: aboveIndices.length,
+        capacityUsd,
+        costUsd: hasNullCost ? null : costUsd,
+      });
+    }
+  }
+
+  // Best multi-bracket capacity (single-bracket hedges excluded)
+  const multiHedges = [...belowHedges, ...aboveHedges].filter((h) => h.bracketCount >= 2);
+  const bestMultiBracketCapacityUsd =
+    multiHedges.length === 0 ? 0 : Math.max(...multiHedges.map((h) => h.capacityUsd));
 
   const common = {
     eventId: event.id,
@@ -103,7 +203,9 @@ export function scanEvent(
     endDate: event.endDate,
     negRisk: event.negRisk,
     brackets,
-    minPayoutAtOrBelowCapUsd,
+    belowHedges,
+    aboveHedges,
+    bestMultiBracketCapacityUsd,
     bracketsShortOfTarget,
     feeKnown,
   };

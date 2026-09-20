@@ -15,12 +15,24 @@ for (const q of terms) {
 }
 
 const usable = scans.filter((s) => s.validLadder && s.feeKnown);
+
+// Add best hedges to each scan for reporting
+const scansWithBestHedges = scans.map((s) => {
+  const bestBelowHedge = s.belowHedges.reduce<typeof s.belowHedges[0] | null>((best, h) => {
+    return !best || h.capacityUsd > best.capacityUsd ? h : best;
+  }, null);
+  const bestAboveHedge = s.aboveHedges.reduce<typeof s.aboveHedges[0] | null>((best, h) => {
+    return !best || h.capacityUsd > best.capacityUsd ? h : best;
+  }, null);
+  return { ...s, bestBelowHedge, bestAboveHedge };
+});
+
 console.log(JSON.stringify({
   scanned: scans.length,
   usable: usable.length,
   gate: {
-    question: 'at least 2 underlyings with a valid ladder, known fees, every bracket able to supply $10,000 of payout, and >= $10,000 of payout available at or below 50c',
-    passing: usable.filter((s) => s.bracketsShortOfTarget === 0 && s.minPayoutAtOrBelowCapUsd >= 10_000).map((s) => s.slug),
+    question: 'at least 2 underlyings where some one-sided threshold hedge spanning 2+ brackets has >= $10,000 of capacity at or below 50c',
+    passing: usable.filter((s) => s.bestMultiBracketCapacityUsd >= 10_000).map((s) => s.slug),
   },
-  scans: scans.sort((a, b) => b.minPayoutAtOrBelowCapUsd - a.minPayoutAtOrBelowCapUsd),
+  scans: scansWithBestHedges.sort((a, b) => b.bestMultiBracketCapacityUsd - a.bestMultiBracketCapacityUsd),
 }, null, 2));
