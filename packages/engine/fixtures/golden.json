@@ -16,5 +16,20 @@
     "feeRate": 0,
     "shape": { "templateId": "range_protect", "payoutUsd": 1000, "low": 68000, "high": 70000 },
     "expect": { "totalCostCents": 50000, "coverageRatio": 1 }
+  },
+  {
+    "name": "thin YES book is covered via the neg-risk NO complement",
+    "brackets": ["<68,000", "68,000-70,000", ">70,000"],
+    "yesPriceMicros": [200000, 500000, 300000],
+    "noPriceMicros": [800000, 500000, 700000],
+    "sizes": [250, 100000, 100000],
+    "feeRate": 0,
+    "shape": { "templateId": "threshold_digital", "payoutUsd": 1000, "direction": "below", "k": 68000 },
+    "expect": {
+      "totalCostCents": 42500,
+      "coverageRatio": 1,
+      "boughtLabels": ["<68,000", "68,000-70,000"],
+      "crossStateOverhedgeCents": 75000
+    }
   }
 ]

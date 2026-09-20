@@ -11,10 +11,16 @@ const fixtures = JSON.parse(readFileSync(fixturesPath, 'utf8')) as Array<{
   name: string;
   brackets: string[];
   yesPriceMicros: number[];
+  noPriceMicros?: number[];
   sizes: number[];
   feeRate: number;
   shape: Record<string, unknown>;
-  expect: { totalCostCents: number; coverageRatio: number; boughtMarkets: string[] };
+  expect: {
+    totalCostCents: number;
+    coverageRatio: number;
+    boughtLabels?: string[];
+    crossStateOverhedgeCents?: number;
+  };
 }>;
 
 const mkt = (id: string, title: string, fee: number) => ({
@@ -44,7 +50,11 @@ describe('golden fixtures', () => {
       const prices = new Map<string, number>();
       for (let i = 0; i < fixture.brackets.length; i += 1) {
         prices.set(`m${i}_yes`, fixture.yesPriceMicros[i]!);
-        prices.set(`m${i}_no`, 1_000_000 - fixture.yesPriceMicros[i]!);
+        if (fixture.noPriceMicros) {
+          prices.set(`m${i}_no`, fixture.noPriceMicros[i]!);
+        } else {
+          prices.set(`m${i}_no`, 1_000_000 - fixture.yesPriceMicros[i]!);
+        }
       }
 
       const deps = {
@@ -68,6 +78,18 @@ describe('golden fixtures', () => {
         (rec.basket.legs.reduce((sum, l) => sum + l.shares, 0) / 1000) * 1_000_000,
       ) / 1_000_000;
       expect(coverageRatio).toBeCloseTo(fixture.expect.coverageRatio, 6);
+
+      if (fixture.expect.boughtLabels) {
+        const boughtLabels = rec.basket.legs
+          .filter((l) => l.shares > 0)
+          .map((l) => l.label)
+          .sort();
+        expect(boughtLabels).toEqual(fixture.expect.boughtLabels.sort());
+      }
+
+      if (fixture.expect.crossStateOverhedgeCents !== undefined) {
+        expect(rec.basket.residual.crossStateOverhedgeCents).toBe(fixture.expect.crossStateOverhedgeCents);
+      }
     });
   }
 });

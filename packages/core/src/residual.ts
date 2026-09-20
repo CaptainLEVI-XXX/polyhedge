@@ -8,6 +8,15 @@ export interface Residual {
   worstStateLabel: string | null;
   /** Excess from conservative evaluation of a payoff that varies inside a bracket. */
   overhedgeCents: Cents;
+  /**
+   * Payout bought in states where nothing is owed.
+   *
+   * Not waste: the neg-risk complement is often the cheapest — sometimes the
+   * only — route to covering a state that IS owed, and this is the price of
+   * that route. But it is money spent on payout the exposure does not need,
+   * so the user sees it rather than discovering it at settlement.
+   */
+  crossStateOverhedgeCents: Cents;
   ruleFlags: string[];
   correlationResidual: boolean;
 }
@@ -28,6 +37,7 @@ export function buildResidual(input: ResidualInput): Residual {
   let covered = 0;
   let worstShortfall = 0;
   let worstIndex = -1;
+  let crossStateOverhedge = 0;
 
   for (let t = 0; t < target.length; t += 1) {
     const f = target[t] ?? 0;
@@ -36,6 +46,8 @@ export function buildResidual(input: ResidualInput): Residual {
     // Clamp: paying double in one state cannot offset paying nothing in another.
     covered += Math.min(g, f);
     if (f - g > worstShortfall) { worstShortfall = f - g; worstIndex = t; }
+    // Payout bought in states where nothing is owed.
+    crossStateOverhedge += Math.max(0, g - f);
   }
 
   return {
@@ -43,6 +55,7 @@ export function buildResidual(input: ResidualInput): Residual {
     worstStateShortfallCents: cents(Math.round(worstShortfall)),
     worstStateLabel: worstIndex >= 0 ? (stateSpace.evals[worstIndex]?.label ?? null) : null,
     overhedgeCents: input.overhedgeCents,
+    crossStateOverhedgeCents: cents(Math.round(crossStateOverhedge)),
     ruleFlags: [...input.ruleFlags],
     correlationResidual: input.correlationResidual,
   };
