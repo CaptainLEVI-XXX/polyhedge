@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { scanEvent } from './scan.js';
-import type { ClobBook, GammaEvent } from '@polyhedge/venue';
+import { scanEvent } from '../../packages/engine/src/scan.js';
+import { type ClobBook, type GammaEvent } from '../../packages/venue/src/index.js';
 
 const market = (id: string, title: string, tok: string, feeRate: number | null = 0.07) => ({
   id, question: `q ${id}`, groupItemTitle: title, description: 'd',

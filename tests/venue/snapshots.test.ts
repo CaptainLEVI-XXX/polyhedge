@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadSnapshot, saveSnapshot } from './snapshots.js';
+import { loadSnapshot, saveSnapshot } from '../../packages/venue/src/snapshots.js';
 
 const books = [{ market: 'm', assetId: 'a', timestamp: '1', hash: 'h',
   bids: [], asks: [{ priceMicros: 450_000, size: 10 }] }];

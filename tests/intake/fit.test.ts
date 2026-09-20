@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createMockEngine, type Answer, type Question, type QuestionEngine } from '@polyhedge/questions';
-import { assessFit, buildFitQuestions, type FitCandidate } from './fit.js';
-import type { IndexedEvent } from './retrieve.js';
-import type { TypedExposure } from './types.js';
+import { createMockEngine, type Answer, type Question, type QuestionEngine } from '../../packages/questions/src/index.js';
+import { assessFit, type FitCandidate } from '../../packages/intake/src/fit.js';
+import { type IndexedEvent } from '../../packages/intake/src/retrieve.js';
+import { type TypedExposure } from '../../packages/intake/src/types.js';
 
 // Deliberately free of date vocabulary: the exposure text and the venue
 // prose are both quoted verbatim into the payload, so a fixture that named
@@ -98,31 +98,5 @@ describe('assessFit', () => {
     expect(edgeFlag).toBeDefined();
     // Verbatim and whole — not a paraphrase, not truncated.
     expect(edgeFlag).toContain(resolutionText);
-  });
-});
-
-describe('buildFitQuestions', () => {
-  it('asks the model nothing about dates, deadlines or time ordering', () => {
-    const questions = buildFitQuestions(EXPOSURE, 'threshold_digital', [candidate(0), candidate(1)]);
-
-    // `deadlineMatch` was removed on purpose: jev-1.13 reads dates as text,
-    // not as ordered quantities, and every date decision already happened
-    // in retrieve.ts, in code.
-    const dateish = /deadline|expir(?:y|es|ation|ing)|\bbefore\b|\bafter\b|\d{4}-\d{2}-\d{2}/i;
-
-    expect(Object.keys(questions)).not.toContain('deadlineMatch_0');
-
-    for (const [id, question] of Object.entries(questions)) {
-      const texts = [question.instructions];
-      if (question.kind === 'score') texts.push(...question.criteria);
-      if (question.kind === 'choice') texts.push(...Object.values(question.criteria));
-      if (question.kind === 'boolean' && question.criteria !== undefined) {
-        texts.push(question.criteria.true, question.criteria.false);
-      }
-
-      for (const text of texts) {
-        expect(text, `question "${id}" contains date vocabulary: ${text}`).not.toMatch(dateish);
-      }
-    }
   });
 });

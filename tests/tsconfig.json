@@ -1,0 +1,28 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false
+  },
+  "include": [
+    "**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../packages/core"
+    },
+    {
+      "path": "../packages/engine"
+    },
+    {
+      "path": "../packages/intake"
+    },
+    {
+      "path": "../packages/questions"
+    },
+    {
+      "path": "../packages/venue"
+    }
+  ]
+}

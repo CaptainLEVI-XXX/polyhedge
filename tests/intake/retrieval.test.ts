@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { GammaEvent, GammaMarket } from '@polyhedge/venue';
-import { indexEvent, parseObservationAt, retrieve, SUPPORTED_SERIES, type IndexedEvent } from './retrieve.js';
+import { type GammaEvent, type GammaMarket } from '../../packages/venue/src/index.js';
+import { indexEvent, parseObservationAt, retrieve, SUPPORTED_SERIES, type IndexedEvent } from '../../packages/intake/src/retrieve.js';
 
 const NOON_ET_DESCRIPTION =
   'This market will resolve based on the final Close price of the Binance 1 minute candle ' +

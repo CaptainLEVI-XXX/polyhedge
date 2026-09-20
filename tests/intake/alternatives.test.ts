@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { quote, type QuoteDeps } from '@polyhedge/engine';
-import type { ClobBook, GammaEvent } from '@polyhedge/venue';
-import { buildAlternatives } from './alternatives.js';
+import { quote, replay, type QuoteDeps } from '../../packages/engine/src/index.js';
+import { type ClobBook, type GammaEvent } from '../../packages/venue/src/index.js';
+import { buildAlternatives } from '../../packages/intake/src/alternatives.js';
 
 const mkt = (id: string, title: string) => ({
   id, question: `q ${id}`, groupItemTitle: title, description: 'd',
@@ -106,6 +106,9 @@ describe('buildAlternatives', () => {
 
       expect(snapshots.has(alt.record.resolved.snapshotId)).toBe(false);
       snapshots.add(alt.record.resolved.snapshotId);
+      const restored = JSON.parse(JSON.stringify(alt.record));
+      const books = alt.record.resolved.legs.map((leg) => book(leg.tokenId, prices[leg.tokenId]!));
+      expect(await replay(restored, books)).toEqual(alt.record.basket);
     }
   });
 
