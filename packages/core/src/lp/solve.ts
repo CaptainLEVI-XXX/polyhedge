@@ -18,8 +18,16 @@ export const SOLVER_OPTIONS = {
   random_seed: 0,
 } as const;
 
-/** Small slack so phase 2 is not made infeasible by phase 1's float result. */
-const SHORTFALL_TOLERANCE = 1e-6;
+/**
+ * Slack on phase 2's shortfall cap, so float error in the `M` phase 1
+ * reports cannot make phase 2 infeasible.
+ *
+ * Deliberately far smaller than it needs to be for that job. Any slack here
+ * is budget the solver can legitimately spend on shortfall to reduce cost,
+ * so it must stay below the precision anything downstream can observe:
+ * share counts are rounded to 6 decimals later, which erases 1e-9 entirely.
+ */
+const SHORTFALL_TOLERANCE = 1e-9;
 
 export class LpNotOptimalError extends Error {
   constructor(public readonly status: string, public readonly phase: string) {
