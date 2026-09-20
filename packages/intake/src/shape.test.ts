@@ -8,6 +8,7 @@ const EXPOSURE: TypedExposure = {
   underlying: 'BTC',
   lossUsd: { value: 8000, provenance: 'stated', raw: '$8k' },
   hedgeRatio: 1,
+  direction: 'below',
   levels: [{ value: 60000, role: 'threshold' }],
   deadline: { value: '2026-12-31', provenance: 'stated', raw: 'Dec 31' },
   followUpsAsked: 0,

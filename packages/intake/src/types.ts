@@ -17,6 +17,8 @@ export interface TypedExposure {
   lossUsd: Parsed<number>;
   budgetUsd?: Parsed<number>;
   hedgeRatio: number;
+  /** Which way the position loses. From the `lossDirection` question, not from level order. */
+  direction: 'below' | 'above' | 'outside';
   levels: NamedLevel[];
   deadline: Parsed<string>;
   followUpsAsked: number;

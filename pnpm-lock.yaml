@@ -44,6 +44,9 @@ importers:
       '@polyhedge/core':
         specifier: workspace:*
         version: link:../core
+      '@polyhedge/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@polyhedge/questions':
         specifier: workspace:*
         version: link:../questions

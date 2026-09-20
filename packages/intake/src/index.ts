@@ -5,3 +5,4 @@ export * from './exposure.js';
 export * from './retrieve.js';
 export * from './shape.js';
 export * from './fit.js';
+export * from './compile.js';
