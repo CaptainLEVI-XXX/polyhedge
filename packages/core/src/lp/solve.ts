@@ -1,6 +1,21 @@
-import loadHighs from 'highs';
+import loadHighsUntyped from 'highs';
+import type { LegacyHighs } from 'highs';
 import type { Cents } from '../money.js';
 import { buildLpModel, type LpInput, type LpModel } from './model.js';
+
+// `highs` ships `export default function highsLoader(...)` in its `.d.ts`, but its
+// package.json declares `"type": "commonjs"`. TypeScript's Node16/NodeNext resolution
+// derives a module's implied format from that package.json field, not from which
+// export condition served the file, so it treats `types.d.ts` as a CommonJS module.
+// Without `esModuleInterop` (project-wide setting, left as-is), a default import of a
+// CommonJS module types as the whole module namespace rather than its declared default
+// export -- so `loadHighsUntyped` above statically types as `typeof import(".../highs/types")`
+// and isn't callable, even though Node's real runtime interop hands us the function
+// (confirmed by every solver test passing). Rather than fight the package's dual-format
+// types, we import the value untyped and assert it against the surface we actually use:
+// `LegacyHighs`, which the package itself exports for exactly this one-shot
+// `solve(text, options)` API.
+const loadHighs = loadHighsUntyped as unknown as () => Promise<LegacyHighs>;
 
 /**
  * Pinned on every solve. `"choose"` lets HiGHS pick a different code path
@@ -41,7 +56,7 @@ export interface LpSolution {
   primal: Record<string, number>;
 }
 
-let highsPromise: Promise<Awaited<ReturnType<typeof loadHighs>>> | null = null;
+let highsPromise: Promise<LegacyHighs> | null = null;
 function highs() { highsPromise ??= loadHighs(); return highsPromise; }
 
 export async function solveLp(model: LpModel, phaseName = 'unknown'): Promise<LpSolution> {

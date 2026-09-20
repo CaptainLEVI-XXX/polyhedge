@@ -13,7 +13,9 @@ export type TargetShape =
   | { templateId: 'range_protect'; payoutUsd: number; low: number; high: number }
   | { templateId: 'linear_strip'; payoutUsd: number; direction: 'below' | 'above'; k1: number; k2: number };
 
-export function isCategorical(shape: TargetShape): boolean {
+export function isCategorical(
+  shape: TargetShape,
+): shape is Extract<TargetShape, { templateId: 'binary_protect' | 'categorical_exclude' }> {
   return shape.templateId === 'binary_protect' || shape.templateId === 'categorical_exclude';
 }
 

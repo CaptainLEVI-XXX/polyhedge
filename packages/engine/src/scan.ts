@@ -132,7 +132,7 @@ export function scanEvent(
     const belowIndices: number[] = [];
     for (let i = 0; i < parsedBrackets.length; i++) {
       const parsed = parsedBrackets[i];
-      if (parsed !== null && parsed.hi !== null && parsed.hi <= strike) {
+      if (parsed && parsed.hi !== null && parsed.hi <= strike) {
         belowIndices.push(i);
       }
     }
@@ -163,7 +163,7 @@ export function scanEvent(
     const aboveIndices: number[] = [];
     for (let i = 0; i < parsedBrackets.length; i++) {
       const parsed = parsedBrackets[i];
-      if (parsed !== null && parsed.lo !== null && parsed.lo >= strike) {
+      if (parsed && parsed.lo !== null && parsed.lo >= strike) {
         aboveIndices.push(i);
       }
     }
