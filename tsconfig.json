@@ -18,6 +18,12 @@
     },
     {
       "path": "packages/intake/tsconfig.evals.json"
+    },
+    {
+      "path": "packages/execution"
+    },
+    {
+      "path": "packages/settlement"
     }
   ]
 }

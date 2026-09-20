@@ -6,7 +6,8 @@
     "declaration": false
   },
   "include": [
-    "**/*.ts"
+    "**/*.ts",
+    "../examples/**/*.ts"
   ],
   "references": [
     {
@@ -23,6 +24,12 @@
     },
     {
       "path": "../packages/venue"
+    },
+    {
+      "path": "../packages/execution"
+    },
+    {
+      "path": "../packages/settlement"
     }
   ]
 }
