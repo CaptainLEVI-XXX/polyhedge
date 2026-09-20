@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMockEngine } from '@polyhedge/questions';
-import { selectShape, SHAPE_QUESTION_ID } from './shape.js';
+import { selectShape, buildShapeQuestion, SHAPE_QUESTION_ID } from './shape.js';
 import type { TypedExposure } from './types.js';
 
 const EXPOSURE: TypedExposure = {
@@ -22,8 +22,7 @@ describe('selectShape', () => {
           kind: 'choice',
           choice: 'none_fit',
           probabilities: {
-            threshold_digital: 0.04,
-            tail_only: 0.02,
+            threshold_digital: 0.06,
             range_protect: 0.02,
             linear_strip: 0.01,
             none_fit: 0.91,
@@ -34,6 +33,7 @@ describe('selectShape', () => {
       'jev-1.13.0',
     );
 
+    expect(Object.keys(buildShapeQuestion(EXPOSURE)[SHAPE_QUESTION_ID]!.criteria!)).toEqual(['threshold_digital', 'range_protect', 'linear_strip', 'none_fit']);
     const selection = await selectShape(EXPOSURE, engine);
 
     expect(selection.kind).toBe('decline');

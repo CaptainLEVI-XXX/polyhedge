@@ -86,7 +86,7 @@ const MONTHS: Record<string, number> = {
   dec: 12, december: 12,
 };
 
-const DEADLINE_PATTERN = /\bby\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/i;
+const DEADLINE_PATTERN = /\bby\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/gi;
 
 /**
  * Parses a phrase like "by Dec 31" or "by December 31 2027" into an ISO date.
@@ -101,7 +101,8 @@ const DEADLINE_PATTERN = /\bby\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?
  * non-leap year) rather than emitting a malformed ISO string.
  */
 export function parseDeadline(text: string, today: Date): Parsed<string> | null {
-  const match = DEADLINE_PATTERN.exec(text);
+  // Later explicit answers can correct an earlier deadline.
+  const match = [...text.matchAll(DEADLINE_PATTERN)].at(-1);
   if (!match) return null;
 
   const monthText = match[1];

@@ -36,6 +36,28 @@ import type { NamedLevel, TypedExposure } from './types.js';
 
 export type PriceTemplateId = 'threshold_digital' | 'tail_only' | 'range_protect' | 'linear_strip';
 
+/**
+ * The templates a user can be asked to pick between. `tail_only` is
+ * deliberately not one of them.
+ *
+ * It is representable — `compile` builds one and `alternatives` offers one
+ * as `cheaper_tail` — but it is IDENTICAL to `threshold_digital` in core:
+ * `levelsOf` and `payoutAt` treat the two the same, so the only thing that
+ * differs is the strike the user names, which is already a level we read
+ * from them. Offering both asks the model to guess a distinction that
+ * nothing downstream can represent, and measurably costs confidence: on a
+ * crash-protection exposure, jev-1.13.0 put 0.15 on `tail_only` and still
+ * chose `threshold_digital`; removing the option raised confidence on that
+ * same text from 0.68 to 0.77. Splitting mass between two options that
+ * compile to the same basket only pushes borderline cases under the
+ * decline threshold.
+ *
+ * `tail_only` stays an OUTPUT of the alternatives layer — "here is a
+ * further-out strike, for less money and less cover" — which is a choice
+ * the user makes against real prices rather than a reading of their words.
+ */
+export type SelectableTemplateId = Exclude<PriceTemplateId, 'tail_only'>;
+
 // Compile-time proof that every id offered here is a real core template id.
 // If `TemplateId` is ever renamed or narrowed, this stops building rather
 // than producing a `TargetShape` the compiler cannot construct.
@@ -47,7 +69,7 @@ const _priceTemplateIdsAreTemplateIds: _PriceTemplateIdsAreTemplateIds = true;
 void _priceTemplateIdsAreTemplateIds;
 
 export type ShapeSelection =
-  | { kind: 'template'; templateId: PriceTemplateId; confidence: number; modelVersion: string }
+  | { kind: 'template'; templateId: SelectableTemplateId; confidence: number; modelVersion: string }
   | { kind: 'decline'; reason: string; modelVersion: string };
 
 /** The one question id this call asks under. */
@@ -72,10 +94,6 @@ const TEMPLATE_CRITERIA: Record<string, string> = {
   threshold_digital:
     'Pays a fixed amount whenever the price ends below (or above) one level, and nothing otherwise. ' +
     'One level, one all-or-nothing payment, the same size however far past the level the price ends.',
-  tail_only:
-    'The same fixed all-or-nothing payment past one level, but the user only wants protection in the ' +
-    'extreme case — a severe move well past where the loss first starts — not at the first level crossed. ' +
-    'They are willing to absorb the ordinary move themselves and only want cover for the worst case.',
   range_protect:
     'Pays whenever the price ends outside a two-sided range — either below the lower level or above the ' +
     'upper one. The user is comfortable while the price stays between the two levels and loses on a move ' +
@@ -132,8 +150,8 @@ export function buildShapeQuestion(exposure: TypedExposure): Record<string, Ques
   };
 }
 
-function isPriceTemplateId(key: string): key is PriceTemplateId {
-  return key === 'threshold_digital' || key === 'tail_only' || key === 'range_protect' || key === 'linear_strip';
+function isSelectableTemplateId(key: string): key is SelectableTemplateId {
+  return key === 'threshold_digital' || key === 'range_protect' || key === 'linear_strip';
 }
 
 /**
@@ -146,7 +164,7 @@ function isPriceTemplateId(key: string): key is PriceTemplateId {
  *      failure from a confident "none of these fit", and the user deserves
  *      to be told which one happened. Deciding `none_fit` first would
  *      report "no supported shape matches" for an answer that was really
- *      just an unreadable smear across all five options.
+ *      just an unreadable smear across all four options.
  *   2. Then `none_fit`, which at this point is known to be confident.
  *   3. Otherwise, a template.
  *
@@ -172,7 +190,7 @@ export async function selectShape(
       `selectShape: "${SHAPE_QUESTION_ID}" came back as kind '${raw.kind}', expected 'choice'`,
     );
   }
-  if (!isPriceTemplateId(raw.choice) && raw.choice !== NONE_FIT_KEY) {
+  if (!isSelectableTemplateId(raw.choice) && raw.choice !== NONE_FIT_KEY) {
     throw new Error(
       `selectShape: "${SHAPE_QUESTION_ID}" chose "${raw.choice}", which is not one of the offered options ` +
         `(${Object.keys(TEMPLATE_CRITERIA).join(', ')})`,
@@ -206,7 +224,7 @@ export async function selectShape(
     };
   }
 
-  if (!isPriceTemplateId(answer.choice)) {
+  if (!isSelectableTemplateId(answer.choice)) {
     throw new Error(`selectShape: unreachable — unvalidated choice "${answer.choice}"`);
   }
 

@@ -18,3 +18,4 @@ snapshots/
 last-quote.json
 
 .DS_Store
+dist-evals/

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "dist-evals", "rootDir": "evals", "composite": true },
+  "include": ["evals/**/*.ts"],
+  "references": [
+    { "path": "./tsconfig.json" },
+    { "path": "../core" },
+    { "path": "../engine" },
+    { "path": "../questions" },
+    { "path": "../venue" }
+  ]
+}

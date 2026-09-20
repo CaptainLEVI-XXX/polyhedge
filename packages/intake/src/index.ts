@@ -7,3 +7,4 @@ export * from './shape.js';
 export * from './fit.js';
 export * from './compile.js';
 export * from './alternatives.js';
+export * from './intake.js';

@@ -1,10 +1,23 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/core" },
-    { "path": "packages/venue" },
-    { "path": "packages/engine" },
-    { "path": "packages/intake" },
-    { "path": "packages/questions" }
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/venue"
+    },
+    {
+      "path": "packages/engine"
+    },
+    {
+      "path": "packages/intake"
+    },
+    {
+      "path": "packages/questions"
+    },
+    {
+      "path": "packages/intake/tsconfig.evals.json"
+    }
   ]
 }
