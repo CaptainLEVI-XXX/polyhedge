@@ -27,6 +27,8 @@ export interface Basket {
   achievable: Cents[];
   residual: Residual;
   maxShortfallDollars: number;
+  /** The over-hedge penalty this basket was solved under; a replay must reuse it. */
+  mu: number;
   phase1Hash: string;
   phase2Hash: string;
 }
@@ -115,6 +117,7 @@ export async function buildBasket(args: BuildBasketArgs): Promise<Basket> {
       ruleFlags: args.ruleFlags, correlationResidual: args.correlationResidual,
     }),
     maxShortfallDollars: lex.maxShortfallDollars,
+    mu,
     phase1Hash: lex.phase1Hash,
     phase2Hash: lex.phase2Hash,
   };

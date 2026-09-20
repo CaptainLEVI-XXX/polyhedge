@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -29,5 +29,11 @@ describe('snapshots', () => {
   });
   it('names the missing id in its error', async () => {
     await expect(loadSnapshot(dir(), 'deadbeef')).rejects.toThrow(/deadbeef/);
+  });
+  it('rejects a snapshot file that does not match the ClobBook shape', async () => {
+    const d = dir();
+    const id = 'badshape';
+    writeFileSync(join(d, `${id}.json`), JSON.stringify([{ market: 'm', bogus: true }]), 'utf8');
+    await expect(loadSnapshot(d, id)).rejects.toThrow(new RegExp(id));
   });
 });

@@ -1,6 +1,6 @@
 import {
-  buildBasket, buildStateSpace, levelsOf, priceMicros,
-  type Basket, type BookLevel, type Cents, type Leg, type TargetShape, type TradableItem,
+  buildBasket, buildStateSpace, dollarsToCents, levelsOf, priceMicros,
+  type Basket, type BookLevel, type Leg, type TargetShape, type TradableItem,
 } from '@polyhedge/core';
 import { parseBracketTitle, type ClobBook, type GammaEvent } from '@polyhedge/venue';
 
@@ -87,9 +87,7 @@ export async function quote(request: QuoteRequest, deps: QuoteDeps): Promise<Quo
     legs,
     books: legs.map((l) => toCoreBook(byToken.get(l.tokenId))),
     feeRates,
-    budgetCents: request.budgetUsd === undefined
-      ? null
-      : (Math.round(request.budgetUsd * 100) as Cents),
+    budgetCents: request.budgetUsd === undefined ? null : dollarsToCents(request.budgetUsd),
     ruleFlags: [],
     correlationResidual: false,
   });
@@ -112,8 +110,9 @@ export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Ba
     feeRates: record.resolved.feeRates,
     budgetCents: record.request.budgetUsd === undefined
       ? null
-      : (Math.round(record.request.budgetUsd * 100) as Cents),
+      : dollarsToCents(record.request.budgetUsd),
     ruleFlags: [],
     correlationResidual: false,
+    mu: record.basket.mu,
   });
 }

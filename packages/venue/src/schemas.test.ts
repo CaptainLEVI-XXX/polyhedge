@@ -28,6 +28,7 @@ const rawMarket = (extra: Record<string, unknown> = {}) => ({
   description: 'Resolves per the Binance 1 minute candle close.',
   clobTokenIds: '["tok_yes","tok_no"]',
   outcomePrices: '["0.0005","0.9995"]',
+  outcomes: '["Yes","No"]',
   orderPriceMinTickSize: 0.001,
   endDate: '2026-12-31T16:00:00Z',
   ...extra,
@@ -55,5 +56,15 @@ describe('parseEvent', () => {
 
   it('carries negRisk so the caller can check the event family', () => {
     expect(parseEvent(rawEvent([rawMarket()])).negRisk).toBe(true);
+  });
+
+  it('parses a normal ["Yes","No"] market', () => {
+    const ev = parseEvent(rawEvent([rawMarket({ outcomes: '["Yes","No"]' })]));
+    expect(ev.markets[0]!.yesTokenId).toBe('tok_yes');
+    expect(ev.markets[0]!.noTokenId).toBe('tok_no');
+  });
+
+  it('throws rather than silently swapping when outcomes are ["No","Yes"]', () => {
+    expect(() => parseEvent(rawEvent([rawMarket({ outcomes: '["No","Yes"]' })]))).toThrow(/outcomes/i);
   });
 });

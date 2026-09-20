@@ -30,7 +30,7 @@ export function parseBook(raw: unknown): ClobBook {
 
 const marketSchema = z.object({
   id: z.string(), question: z.string(), groupItemTitle: z.string(), description: z.string(),
-  clobTokenIds: z.string(), outcomePrices: z.string(),
+  clobTokenIds: z.string(), outcomePrices: z.string(), outcomes: z.string(),
   orderPriceMinTickSize: z.number(), endDate: z.string(),
   feeSchedule: z.object({ rate: z.number(), takerOnly: z.boolean() }).optional(),
 });
@@ -66,6 +66,12 @@ export function parseEvent(raw: unknown): GammaEvent {
     markets: e.markets.map((m) => {
       const tokens = z.array(z.string()).parse(JSON.parse(m.clobTokenIds));
       const prices = z.array(z.string()).parse(JSON.parse(m.outcomePrices));
+      const outcomes = z.array(z.string()).parse(JSON.parse(m.outcomes));
+      if ((outcomes[0] ?? '').toLowerCase() !== 'yes') {
+        throw new Error(
+          `market ${m.id} has outcomes ${JSON.stringify(outcomes)}; expected "Yes" first, refusing to guess token identity`,
+        );
+      }
       return {
         id: m.id, question: m.question, groupItemTitle: m.groupItemTitle,
         description: m.description,

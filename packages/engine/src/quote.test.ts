@@ -2,6 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { dollarsToCents } from '@polyhedge/core';
 import type { ClobBook, GammaEvent } from '@polyhedge/venue';
 import { quote, replay } from './quote.js';
 
@@ -77,6 +78,56 @@ describe('quote', () => {
       deps(bad),
     )).rejects.toThrow(/unparseable/i);
   });
+
+  describe('budgetUsd', () => {
+    // A two-bracket ladder with zero fees: mLow at $0.20/share is the
+    // strictly cheapest way to cover the "below 68,000" state, so a
+    // budget-bound solve spends the whole budget on it and the resulting
+    // cost in cents is exactly the dollar budget converted to cents.
+    const ladderEvent: GammaEvent = {
+      id: 'e2', slug: 'btc-ladder', title: 'BTC ladder', negRisk: true,
+      negRiskMarketId: '0x2', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'],
+      markets: [mkt('mLow', '<68000', 0), mkt('mHigh', '>=68000', 0)],
+    };
+    const ladderPrices: Record<string, number> = {
+      mLow_yes: 200_000, mLow_no: 800_000,
+      mHigh_yes: 500_000, mHigh_no: 500_000,
+    };
+    const ladderDeps = () => ({
+      fetchEvent: async () => ladderEvent,
+      fetchBooks: async (ids: string[]) => ids.map((id) => book(id, ladderPrices[id] ?? 500_000)),
+      saveSnapshot: async () => 'snap-ladder',
+    });
+
+    it('spends no more than the requested budget', async () => {
+      const rec = await quote(
+        {
+          eventId: 'e2',
+          shape: { templateId: 'threshold_digital', payoutUsd: 1000, direction: 'below', k: 68000 },
+          budgetUsd: 1,
+        },
+        ladderDeps(),
+      );
+      expect(rec.basket.totalCostCents).toBeLessThanOrEqual(dollarsToCents(1));
+    });
+
+    it('converts budgetUsd through dollarsToCents, not a raw float cast', async () => {
+      // 1.015 is a float half-cent tie: `Math.round(1.015 * 100)` gives 101,
+      // silently hiding the tie, while banker's rounding correctly gives 102.
+      expect(Math.round(1.015 * 100)).toBe(101);
+      expect(dollarsToCents(1.015)).toBe(102);
+
+      const rec = await quote(
+        {
+          eventId: 'e2',
+          shape: { templateId: 'threshold_digital', payoutUsd: 1000, direction: 'below', k: 68000 },
+          budgetUsd: 1.015,
+        },
+        ladderDeps(),
+      );
+      expect(rec.basket.totalCostCents).toBe(dollarsToCents(1.015));
+    });
+  });
 });
 
 describe('replay', () => {
@@ -100,5 +151,22 @@ describe('replay', () => {
     const roundTripped = JSON.parse(JSON.stringify(rec)) as typeof rec;
     const books = Object.keys(prices).map((id) => book(id, prices[id]!));
     expect((await replay(roundTripped, books)).legs).toEqual(rec.basket.legs);
+  });
+
+  it('re-solves under the mu recorded on the basket, not the current default', async () => {
+    const rec = await quote(
+      { eventId: 'e1', shape: { templateId: 'range_protect', payoutUsd: 2500, low: 68000, high: 70000 } },
+      deps(),
+    );
+    const books = Object.keys(prices).map((id) => book(id, prices[id]!));
+
+    const mutated = { ...rec, basket: { ...rec.basket, mu: 0.5 } };
+    const again = await replay(mutated, books);
+
+    // mu genuinely flowed from the record: the replayed basket carries it...
+    expect(again.mu).toBe(0.5);
+    // ...rather than falling back to buildBasket's own default.
+    expect(rec.basket.mu).not.toBe(0.5);
+    expect(again).not.toEqual(rec.basket);
   });
 });
