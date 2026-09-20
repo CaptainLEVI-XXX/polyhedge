@@ -34,10 +34,11 @@ const rawMarket = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-const rawEvent = (markets: unknown[]) => ({
+const rawEvent = (markets: unknown[], extra: Record<string, unknown> = {}) => ({
   id: '1011359', slug: 'btc-dec-31', title: 'Bitcoin price on December 31?',
   negRisk: true, negRiskMarketID: '0x2cf05', endDate: '2026-12-31T16:00:00Z',
   tags: [{ label: 'Bitcoin', slug: 'bitcoin' }], markets,
+  ...extra,
 });
 
 describe('parseEvent', () => {
@@ -66,5 +67,14 @@ describe('parseEvent', () => {
 
   it('throws rather than silently swapping when outcomes are ["No","Yes"]', () => {
     expect(() => parseEvent(rawEvent([rawMarket({ outcomes: '["No","Yes"]' })]))).toThrow(/outcomes/i);
+  });
+
+  it('extracts series tickers, distinct from tags', () => {
+    const ev = parseEvent(rawEvent([rawMarket()], { series: [{ ticker: 'bitcoin-neg-risk-weekly' }] }));
+    expect(ev.seriesTickers).toEqual(['bitcoin-neg-risk-weekly']);
+  });
+
+  it('reports no series as an empty list, never a guess', () => {
+    expect(parseEvent(rawEvent([rawMarket()])).seriesTickers).toEqual([]);
   });
 });

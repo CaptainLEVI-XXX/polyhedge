@@ -10,7 +10,7 @@ const market = (id: string, title: string, tok: string, feeRate: number | null =
 
 const event: GammaEvent = {
   id: 'e1', slug: 'btc-dec-31', title: 'Bitcoin price on December 31?',
-  negRisk: true, negRiskMarketId: '0xabc', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'],
+  negRisk: true, negRiskMarketId: '0xabc', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'], seriesTickers: [],
   markets: [market('m0', '<68,000', 't0'), market('m1', '68,000-70,000', 't1'), market('m2', '>70,000', 't2')],
 };
 

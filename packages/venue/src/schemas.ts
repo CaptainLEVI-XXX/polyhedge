@@ -39,6 +39,12 @@ const eventSchema = z.object({
   id: z.string(), slug: z.string(), title: z.string(),
   negRisk: z.boolean(), negRiskMarketID: z.string().optional(), endDate: z.string(),
   tags: z.array(z.object({ label: z.string(), slug: z.string() })),
+  // The `crypto` tag also pulls in Up/Down, hit-price, meme-coin and
+  // person-vs-person markets. `series` is the field that actually
+  // distinguishes market families, so callers must select by
+  // `seriesTickers`, never by `tags`. Optional because not every raw
+  // response includes it; absence maps to an empty list, never a guess.
+  series: z.array(z.object({ ticker: z.string() })).optional(),
   markets: z.array(marketSchema),
 });
 
@@ -54,7 +60,10 @@ export interface GammaMarket {
 export interface GammaEvent {
   id: string; slug: string; title: string;
   negRisk: boolean; negRiskMarketId: string | null; endDate: string;
-  tags: string[]; markets: GammaMarket[];
+  tags: string[];
+  /** From `series[].ticker`. The `crypto` tag is not a substitute for this. */
+  seriesTickers: string[];
+  markets: GammaMarket[];
 }
 
 export function parseEvent(raw: unknown): GammaEvent {
@@ -63,6 +72,7 @@ export function parseEvent(raw: unknown): GammaEvent {
     id: e.id, slug: e.slug, title: e.title,
     negRisk: e.negRisk, negRiskMarketId: e.negRiskMarketID ?? null, endDate: e.endDate,
     tags: e.tags.map((t) => t.slug),
+    seriesTickers: e.series?.map((s) => s.ticker) ?? [],
     markets: e.markets.map((m) => {
       const tokens = z.array(z.string()).parse(JSON.parse(m.clobTokenIds));
       const prices = z.array(z.string()).parse(JSON.parse(m.outcomePrices));

@@ -14,7 +14,7 @@ const mkt = (id: string, title: string, fee: number | null = 0.07) => ({
 
 const event: GammaEvent = {
   id: 'e1', slug: 'btc', title: 'BTC on Dec 31', negRisk: true,
-  negRiskMarketId: '0x1', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'],
+  negRiskMarketId: '0x1', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'], seriesTickers: [],
   // deliberately NOT in ascending bracket order
   markets: [mkt('mC', '>70,000'), mkt('mA', '<68,000'), mkt('mB', '68,000-70,000')],
 };
@@ -86,7 +86,7 @@ describe('quote', () => {
     // cost in cents is exactly the dollar budget converted to cents.
     const ladderEvent: GammaEvent = {
       id: 'e2', slug: 'btc-ladder', title: 'BTC ladder', negRisk: true,
-      negRiskMarketId: '0x2', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'],
+      negRiskMarketId: '0x2', endDate: '2026-12-31T16:00:00Z', tags: ['bitcoin'], seriesTickers: [],
       markets: [mkt('mLow', '<68000', 0), mkt('mHigh', '>=68000', 0)],
     };
     const ladderPrices: Record<string, number> = {

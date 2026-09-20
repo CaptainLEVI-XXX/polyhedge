@@ -43,7 +43,7 @@ describe('golden fixtures', () => {
 
       const event: GammaEvent = {
         id: 'e1', slug: 'test', title: 'Test Event', negRisk: true,
-        negRiskMarketId: '0x1', endDate: '2026-12-31T16:00:00Z', tags: [],
+        negRiskMarketId: '0x1', endDate: '2026-12-31T16:00:00Z', tags: [], seriesTickers: [],
         markets,
       };
 
