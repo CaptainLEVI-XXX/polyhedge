@@ -10,6 +10,25 @@ export interface QuoteRequest {
   budgetUsd?: number;
   /** Extra split points beyond the shape's own levels. */
   extraLevels?: number[];
+  /** Over-hedge penalty override, e.g. to request a "shaped" alternative solve. */
+  mu?: number;
+  /**
+   * Human-readable note on how this market's observation moment relates to
+   * the user's deadline. Time basis risk, not merely "holding longer".
+   */
+  observationNote?: string;
+}
+
+export interface QuoteMeta {
+  /** ISO timestamp. */
+  quotedAt: string;
+  /** Which calibration produced the inputs. */
+  calibrationMapVersion: string;
+  /** e.g. "jev-1.13.0" */
+  jevModelVersion: string;
+  /** What was passed in, so replay reproduces it. */
+  ruleFlags: string[];
+  correlationResidual: boolean;
 }
 
 export interface QuoteRecord {
@@ -22,12 +41,21 @@ export interface QuoteRecord {
     snapshotId: string;
   };
   basket: Basket;
+  meta: QuoteMeta;
 }
 
 export interface QuoteDeps {
   fetchEvent(id: string): Promise<GammaEvent>;
   fetchBooks(tokenIds: string[]): Promise<ClobBook[]>;
   saveSnapshot(books: ClobBook[]): Promise<string>;
+  now?: () => Date;
+}
+
+export interface QuoteOptions {
+  ruleFlags?: string[];
+  correlationResidual?: boolean;
+  calibrationMapVersion?: string;
+  jevModelVersion?: string;
 }
 
 /** The only place venue's plain numbers become core's branded types. */
@@ -68,7 +96,11 @@ function resolveEvent(event: GammaEvent): { items: TradableItem[]; legs: Leg[]; 
   return { items, legs, feeRates };
 }
 
-export async function quote(request: QuoteRequest, deps: QuoteDeps): Promise<QuoteRecord> {
+export async function quote(
+  request: QuoteRequest,
+  deps: QuoteDeps,
+  options?: QuoteOptions,
+): Promise<QuoteRecord> {
   const event = await deps.fetchEvent(request.eventId);
   const { items, legs, feeRates } = resolveEvent(event);
 
@@ -81,6 +113,12 @@ export async function quote(request: QuoteRequest, deps: QuoteDeps): Promise<Quo
     [...levelsOf(request.shape), ...(request.extraLevels ?? [])],
   );
 
+  const ruleFlags = options?.ruleFlags ?? [];
+  const correlationResidual = options?.correlationResidual ?? false;
+  const calibrationMapVersion = options?.calibrationMapVersion ?? 'unfitted';
+  const jevModelVersion = options?.jevModelVersion ?? 'unknown';
+  const now = deps.now ?? (() => new Date());
+
   const basket = await buildBasket({
     shape: request.shape,
     stateSpace,
@@ -88,11 +126,24 @@ export async function quote(request: QuoteRequest, deps: QuoteDeps): Promise<Quo
     books: legs.map((l) => toCoreBook(byToken.get(l.tokenId))),
     feeRates,
     budgetCents: request.budgetUsd === undefined ? null : dollarsToCents(request.budgetUsd),
-    ruleFlags: [],
-    correlationResidual: false,
+    ruleFlags,
+    correlationResidual,
+    ...(request.mu !== undefined ? { mu: request.mu } : {}),
   });
 
-  return { version: 1, request, resolved: { items, legs, feeRates, snapshotId }, basket };
+  return {
+    version: 1,
+    request,
+    resolved: { items, legs, feeRates, snapshotId },
+    basket,
+    meta: {
+      quotedAt: now().toISOString(),
+      calibrationMapVersion,
+      jevModelVersion,
+      ruleFlags,
+      correlationResidual,
+    },
+  };
 }
 
 /** Re-solve a stored quote from its pinned books. No network. */
@@ -111,8 +162,8 @@ export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Ba
     budgetCents: record.request.budgetUsd === undefined
       ? null
       : dollarsToCents(record.request.budgetUsd),
-    ruleFlags: [],
-    correlationResidual: false,
+    ruleFlags: record.meta.ruleFlags,
+    correlationResidual: record.meta.correlationResidual,
     mu: record.basket.mu,
   });
 }

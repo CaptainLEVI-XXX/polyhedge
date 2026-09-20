@@ -170,3 +170,45 @@ describe('replay', () => {
     expect(again).not.toEqual(rec.basket);
   });
 });
+
+describe('mu on the request', () => {
+  it('a requested mu flows through to the basket', async () => {
+    const rec = await quote(
+      {
+        eventId: 'e1',
+        shape: { templateId: 'range_protect', payoutUsd: 2500, low: 68000, high: 70000 },
+        mu: 0.5,
+      },
+      deps(),
+    );
+    expect(rec.basket.mu).toBe(0.5);
+  });
+});
+
+describe('ruleFlags option', () => {
+  it('reaches record.basket.residual.ruleFlags', async () => {
+    const rec = await quote(
+      { eventId: 'e1', shape: { templateId: 'threshold_digital', payoutUsd: 1000, direction: 'below', k: 68000 } },
+      deps(),
+      { ruleFlags: ['resolution source differs'] },
+    );
+    expect(rec.basket.residual.ruleFlags).toEqual(['resolution source differs']);
+  });
+});
+
+describe('provenance', () => {
+  it('a record round-trips through JSON with meta intact, and replay still reproduces legs', async () => {
+    const rec = await quote(
+      { eventId: 'e1', shape: { templateId: 'tail_only', payoutUsd: 1000, direction: 'below', k: 68000 } },
+      deps(),
+      { calibrationMapVersion: 'cal-2026-09-01', jevModelVersion: 'jev-1.13.0' },
+    );
+
+    const roundTripped = JSON.parse(JSON.stringify(rec)) as typeof rec;
+    expect(roundTripped.meta).toEqual(rec.meta);
+
+    const books = Object.keys(prices).map((id) => book(id, prices[id]!));
+    const again = await replay(roundTripped, books);
+    expect(again.legs).toEqual(rec.basket.legs);
+  });
+});
