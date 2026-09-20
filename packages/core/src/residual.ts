@@ -9,7 +9,13 @@ export interface Residual {
   /** Excess from conservative evaluation of a payoff that varies inside a bracket. */
   overhedgeCents: Cents;
   /**
-   * Payout bought in states where nothing is owed.
+   * Payout bought BEYOND what the exposure owes, summed over every state.
+   *
+   * Note the scope: this is `Σ max(0, achievable − target)` across all
+   * states, so it counts both payout in a state that owes nothing AND
+   * excess payout in a state that owes something. The second is easy to
+   * overlook — an earlier version of this comment described only the
+   * first, which understated the field by construction.
    *
    * Not waste: the neg-risk complement is often the cheapest — sometimes the
    * only — route to covering a state that IS owed, and this is the price of
