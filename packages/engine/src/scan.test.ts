@@ -20,28 +20,43 @@ const book = (levels: [number, number][]): ClobBook => ({
 });
 
 describe('scanEvent', () => {
-  it('measures payout as total purchasable shares, not premium', () => {
+  it('measures cheap depth separately from raw ask size', () => {
+    const books = new Map<string, ClobBook>([
+      ['t0', book([[1_000, 28_381], [990_000, 125_008]])],
+      ['t1', book([[200_000, 5000]])],
+      ['t2', book([[300_000, 5000]])],
+    ]);
+    const s = scanEvent(event, books, 500);
+    expect(s.brackets[0]!.rawAskSizeUsd).toBe(153_389);
+    expect(s.brackets[0]!.payoutAtOrBelowCapUsd).toBe(28_381);
+  });
+
+  it('costs a target payout by walking the real book with fees', () => {
     const books = new Map<string, ClobBook>([
       ['t0', book([[100_000, 600], [120_000, 400]])],
       ['t1', book([[200_000, 5000]])],
       ['t2', book([[300_000, 5000]])],
     ]);
-    const s = scanEvent(event, books);
-    expect(s.brackets[0]!.maxPayoutUsd).toBe(1000);           // 600 + 400 shares
-    expect(s.brackets[0]!.costToFillUsd).toBeCloseTo(108, 6); // 600*0.10 + 400*0.12
+    // 500 shares all from the 0.10 level: 500 * (0.10 + 0.07*0.10*0.90)
+    expect(scanEvent(event, books, 500).brackets[0]!.costToBuyTargetUsd).toBeCloseTo(53.15, 6);
+    // 1000 shares spans both levels: 600*0.1063 + 400*0.127392
+    expect(scanEvent(event, books, 1000).brackets[0]!.costToBuyTargetUsd).toBeCloseTo(114.7368, 6);
   });
 
-  it('reports the minimum across brackets as the binding capacity', () => {
+  it('returns null cost and counts the bracket short when depth runs out', () => {
+    const books = new Map<string, ClobBook>([['t0', book([[100_000, 600]])]]);
+    const s = scanEvent(event, books, 1000);
+    expect(s.brackets[0]!.costToBuyTargetUsd).toBeNull();
+    expect(s.bracketsShortOfTarget).toBe(3); // t1 and t2 have no book at all
+  });
+
+  it('reports the minimum cheap depth as the binding capacity', () => {
     const books = new Map<string, ClobBook>([
       ['t0', book([[100_000, 250]])],
       ['t1', book([[200_000, 5000]])],
       ['t2', book([[300_000, 9000]])],
     ]);
-    expect(scanEvent(event, books).minPayoutUsd).toBe(250);
-  });
-
-  it('treats a missing book as zero capacity rather than throwing', () => {
-    expect(scanEvent(event, new Map()).minPayoutUsd).toBe(0);
+    expect(scanEvent(event, books, 100).minPayoutAtOrBelowCapUsd).toBe(250);
   });
 
   it('flags an event whose titles do not parse', () => {
@@ -64,9 +79,9 @@ describe('scanEvent', () => {
     expect(scanEvent(noFee, new Map()).feeKnown).toBe(false);
   });
 
-  it('reports cost to fill as unknown when the fee rate is unknown', () => {
+  it('reports cost to buy target as unknown when the fee rate is unknown', () => {
     const noFee = { ...event, markets: event.markets.map((m) => ({ ...m, feeRate: null })) };
     const books = new Map<string, ClobBook>([['t0', book([[100_000, 100]])]]);
-    expect(scanEvent(noFee, books).brackets[0]!.costToFillUsd).toBeNull();
+    expect(scanEvent(noFee, books, 50).brackets[0]!.costToBuyTargetUsd).toBeNull();
   });
 });

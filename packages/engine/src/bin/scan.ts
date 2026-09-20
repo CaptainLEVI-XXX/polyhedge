@@ -19,8 +19,8 @@ console.log(JSON.stringify({
   scanned: scans.length,
   usable: usable.length,
   gate: {
-    question: 'at least 2 underlyings with a valid ladder and >= $10,000 minimum bracket payout',
-    passing: usable.filter((s) => s.minPayoutUsd >= 10_000).map((s) => s.slug),
+    question: 'at least 2 underlyings with a valid ladder, known fees, every bracket able to supply $10,000 of payout, and >= $10,000 of payout available at or below 50c',
+    passing: usable.filter((s) => s.bracketsShortOfTarget === 0 && s.minPayoutAtOrBelowCapUsd >= 10_000).map((s) => s.slug),
   },
-  scans: scans.sort((a, b) => b.minPayoutUsd - a.minPayoutUsd),
+  scans: scans.sort((a, b) => b.minPayoutAtOrBelowCapUsd - a.minPayoutAtOrBelowCapUsd),
 }, null, 2));
