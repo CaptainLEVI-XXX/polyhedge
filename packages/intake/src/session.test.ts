@@ -32,6 +32,20 @@ describe('confirm', () => {
   });
 });
 
+describe('newSession jevModelVersion', () => {
+  it('defaults to "unknown" when no version is supplied', () => {
+    const s = newSession('I hold 2 BTC', 'session-5');
+
+    expect(s.jevModelVersion).toBe('unknown');
+  });
+
+  it('records the version supplied by the caller', () => {
+    const s = newSession('I hold 2 BTC', 'session-6', 'jev-1.13.0');
+
+    expect(s.jevModelVersion).toBe('jev-1.13.0');
+  });
+});
+
 describe('round trip', () => {
   it('preserves originalText and prior assumptions through ask -> applyAnswer -> confirm', () => {
     const withAssumption = addAssumption(newSession('I hold 2 BTC', 'session-4'), 'assumed no existing hedge');

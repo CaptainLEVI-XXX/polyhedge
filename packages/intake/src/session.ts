@@ -1,8 +1,5 @@
 import type { TypedExposure } from './types.js';
 
-/** Which Jev version produced the current session's extraction. Bump alongside calibration changes. */
-export const JEV_MODEL_VERSION = 'jev-1';
-
 export interface IntakeSession {
   id: string;
   originalText: string;
@@ -15,14 +12,14 @@ export interface IntakeSession {
   answers: { field: string; answer: string }[];
 }
 
-export function newSession(text: string, id: string): IntakeSession {
+export function newSession(text: string, id: string, jevModelVersion = 'unknown'): IntakeSession {
   return {
     id,
     originalText: text,
     confirmed: {},
     assumptions: [],
     followUpsAsked: 0,
-    jevModelVersion: JEV_MODEL_VERSION,
+    jevModelVersion,
     answers: [],
   };
 }
