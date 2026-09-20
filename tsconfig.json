@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/venue" },
-    { "path": "packages/engine" }
+    { "path": "packages/engine" },
+    { "path": "packages/intake" }
   ]
 }
