@@ -38,6 +38,7 @@ describe('parseDeadline', () => {
 
     expect(result?.value).toBe('2027-12-31');
     expect(result?.provenance).toBe('stated');
+    expect(result?.raw).toBe('December 31 2027');
   });
 
   it('rolls a past month/day forward to next year and keeps it inferred', () => {
@@ -45,6 +46,12 @@ describe('parseDeadline', () => {
 
     expect(result?.value).toBe('2027-01-05');
     expect(result?.provenance).toBe('inferred');
+  });
+
+  it('rejects an impossible calendar date instead of normalising it', () => {
+    const result = parseDeadline('by Feb 29', new Date('2026-06-01T00:00:00Z'));
+
+    expect(result).toBeNull();
   });
 });
 

@@ -92,8 +92,13 @@ const DEADLINE_PATTERN = /\bby\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?
  * Parses a phrase like "by Dec 31" or "by December 31 2027" into an ISO date.
  * When the year is not in the text, it is inferred from `today` (rolling
  * forward a year if the month/day has already passed) and marked `inferred`
- * — `raw` stays the user's own words so a later confirmation question is
- * built from what they actually said, not from our guessed year.
+ * — `raw` always stays exactly the user's own words (including the year
+ * when they stated one) so a later confirmation question is built from
+ * what they actually said, never from our own guess or an edited version
+ * of their text in either direction.
+ *
+ * Returns `null` for an impossible calendar date (e.g. "Feb 29" in a
+ * non-leap year) rather than emitting a malformed ISO string.
  */
 export function parseDeadline(text: string, today: Date): Parsed<string> | null {
   const match = DEADLINE_PATTERN.exec(text);
@@ -110,8 +115,6 @@ export function parseDeadline(text: string, today: Date): Parsed<string> | null 
   const day = Number(dayText);
   if (!Number.isInteger(day) || day < 1 || day > 31) return null;
 
-  const raw = `${monthText} ${dayText}`;
-
   let year: number;
   let provenance: Provenance;
   if (yearText !== undefined) {
@@ -125,6 +128,17 @@ export function parseDeadline(text: string, today: Date): Parsed<string> | null 
     year = candidateMs < todayMs ? todayYear + 1 : todayYear;
   }
 
+  // Date.UTC silently normalises an impossible day (29 Feb -> 1 Mar in a
+  // non-leap year) instead of failing. Round-trip the constructed date and
+  // reject it unless it lands on exactly the year/month/day we asked for.
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  const isRealDate =
+    candidate.getUTCFullYear() === year &&
+    candidate.getUTCMonth() === month - 1 &&
+    candidate.getUTCDate() === day;
+  if (!isRealDate) return null;
+
+  const raw = yearText !== undefined ? `${monthText} ${dayText} ${yearText}` : `${monthText} ${dayText}`;
   const iso = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   return { value: iso, provenance, raw };
 }
