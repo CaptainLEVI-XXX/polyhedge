@@ -31,6 +31,7 @@ function requireKey(): string {
 }
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   try {
     const caller = requireCaller(request);
     rateLimit(caller, 'intake', LIMIT_PER_MINUTE, 60_000);
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
     // it is. A quote does not: the raw record carries token ids, hashes and
     // engine vocabulary, and its numbers are unrounded.
     if (result.kind !== 'quoted') {
-      return Response.json({ result, indexedCount: index.events.length });
+      return Response.json({ result, indexedCount: index.events.length, tookMs: Date.now() - startedAt });
     }
 
     const event = index.events.find((e) => e.eventId === result.record.request.eventId);
@@ -135,6 +136,7 @@ export async function POST(request: Request) {
     return Response.json({
       result: { kind: 'quoted', quoteId: stored.id, view },
       indexedCount: index.events.length,
+      tookMs: Date.now() - startedAt,
     });
   } catch (error) {
     if (error instanceof TooManyRequests) {
