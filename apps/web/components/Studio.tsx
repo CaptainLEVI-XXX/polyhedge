@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ladder } from './Ladder';
 import { Allocation } from './Allocation';
+import { checkFunding } from '@/lib/funding';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
@@ -405,6 +406,11 @@ function Review({
     }
   };
 
+  // No wallet yet, so this reports honestly that affordability is unknown
+  // rather than implying the money is there. When a wallet arrives the same
+  // check runs against its pUSD balance, net of resting-order reservations.
+  const funding = checkFunding(null, 0, 0);
+
   if (frozen === null) {
     return (
       <div className="box">
@@ -418,6 +424,7 @@ function Review({
             {busy ? 'Pinning' : 'Review this'}
           </button>
         </div>
+        <div className="note info">{funding.message}</div>
       </div>
     );
   }
@@ -442,6 +449,14 @@ function Review({
           </div>
         </div>
         <button onClick={() => onFreeze(null)}>Unpin</button>
+        <button className="primary" disabled title="Placing orders is not built yet">
+          Place {option.ladder.heldCount} orders
+        </button>
+      </div>
+      <div className="note warn">
+        {funding.message} Orders are settled in pUSD, which is not the same token as the USDC you
+        may already hold — it has to be deposited and wrapped first. Nothing can be placed until
+        that is done, and this says so here rather than at the moment you press the button.
       </div>
       {stale && (
         <div className="note stop">
