@@ -37,7 +37,7 @@ function fixture() {
       cashMicros: intent.side === 'BUY' ? 4_000_000 : 3_800_000, feeMicros: 0, transactionHash: `tx-${envelope.orderId}` }] };
   };
   const venue: ExecutionVenue = {
-    async state() { return { mode: 'open', availableCashMicros: 20_000_000, sessionValid: true, approvalsReady: true }; },
+    async state() { return { mode: 'open', availableCashMicros: 20_000_000, signerCanTrade: true, approvalsReady: true }; },
     async book(tokenId): Promise<MarketBook> {
       return { tokenId, observedAt: now.toISOString(), tickMicros: 10_000, shareStepMicros: 10_000,
         minSharesMicros: 10_000, feeBps: 0,
@@ -170,10 +170,10 @@ describe('durable sequential execution', () => {
 
   it('pauses cancel-only without submitting a sell and rejects whole-basket underfunding upfront', async () => {
     const f = fixture();
-    f.venue.state = async () => ({ mode: 'cancel_only', availableCashMicros: 20_000_000, sessionValid: true, approvalsReady: true });
+    f.venue.state = async () => ({ mode: 'cancel_only', availableCashMicros: 20_000_000, signerCanTrade: true, approvalsReady: true });
     expect((await execute(quote, authorization, f.deps)).kind).toBe('pending');
     expect(f.intents.size).toBe(0);
-    f.venue.state = async () => ({ mode: 'open', availableCashMicros: 7_000_000, sessionValid: true, approvalsReady: true });
+    f.venue.state = async () => ({ mode: 'open', availableCashMicros: 7_000_000, signerCanTrade: true, approvalsReady: true });
     expect((await execute(quote, authorization, f.deps)).kind).toBe('rejected');
     expect(f.intents.size).toBe(0);
   });

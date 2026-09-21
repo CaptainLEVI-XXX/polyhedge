@@ -204,7 +204,7 @@ export async function execute(quote: SelectedQuote, authorization: Authorization
       let state;
       try { state = await deps.venue.state(authorization.wallet); }
       catch { return result(r, 'Venue state unavailable; execution paused'); }
-      if (!state.sessionValid || !state.approvalsReady) return result(r, 'Wallet session or approvals are not ready');
+      if (!state.signerCanTrade || !state.approvalsReady) return result(r, 'This signer may not trade, or approvals are not ready');
       // Cancel-only cannot submit a SELL either. Wait, without pretending unwind is available.
       if (state.mode !== 'open') return result(r, `Venue is ${state.mode}; no new orders submitted`);
 

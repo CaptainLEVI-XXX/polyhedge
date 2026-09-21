@@ -69,7 +69,8 @@ export interface VenueState {
   mode: 'open' | 'post_only' | 'cancel_only' | 'closed';
   /** Spendable collateral net of existing resting-order reservations. */
   availableCashMicros: number;
-  sessionValid: boolean;
+  /** Whether THIS signer may trade — the owner itself, or a valid session key. */
+  signerCanTrade: boolean;
   approvalsReady: boolean;
 }
 export interface ExecutionVenue {

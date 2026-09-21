@@ -42,6 +42,29 @@ export async function sessionReady(
 }
 
 /**
+ * May this signer place an order right now?
+ *
+ * Two signers can: the wallet's OWNER, signing each order itself, and a valid
+ * CLOB-scoped SESSION KEY signing on its behalf. Only the second was accepted
+ * before, which meant an owner-signed order was refused by our own code — and
+ * an owner signing every order is exactly what happens before session keys are
+ * turned on.
+ *
+ * The owner needs no registry lookup: it is the wallet's own signer, so its
+ * authority is the wallet, not a grant that can expire or be revoked. A session
+ * key does need one on every call, because a cached key cannot notice it has
+ * been revoked.
+ */
+export async function signerReady(
+  client: Pick<SecureClient, 'account' | 'fetchSessionKeys'>,
+  now: Date,
+): Promise<boolean> {
+  if (client.account.walletType !== WalletType.DEPOSIT_WALLET) return false;
+  if (client.account.signerType === SignerType.OWNER) return true;
+  return sessionReady(client, now);
+}
+
+/**
  * Explicit setup action; never called implicitly while posting an order.
  * The SDK grants the current environment's trading approvals and waits for
  * confirmation. Then refresh both collateral and each traded token's CLOB cache.

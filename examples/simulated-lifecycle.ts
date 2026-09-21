@@ -44,7 +44,7 @@ export async function runSimulation(winner = true) {
     });
     const accepted = bindQuote(record, pinned, ['Simulation: no real money or reference feed']);
     const venue: ExecutionVenue = {
-      state: async () => ({ mode: 'open', availableCashMicros: 100_000_000, sessionValid: true, approvalsReady: true }),
+      state: async () => ({ mode: 'open', availableCashMicros: 100_000_000, signerCanTrade: true, approvalsReady: true }),
       book: async tokenId => ({ tokenId, observedAt: now.toISOString(), tickMicros: 10_000, shareStepMicros: 10_000,
         minSharesMicros: 1_000_000, feeBps: 0, asks: [{ priceMicros: 200_000, sharesMicros: 100_000_000 }], bids: [] }),
       prepare: async (_wallet, intent) => ({ orderId: 'simulation-order', payload: intent }),

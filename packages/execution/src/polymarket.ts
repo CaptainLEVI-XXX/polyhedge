@@ -1,7 +1,7 @@
 import { OrderSide, OrderType, SignatureType, type SecureClient, type SignedOrder } from '@polymarket/client';
 import { hashTypedData, type Address } from 'viem';
 import { integer, mulDiv } from './order.js';
-import { sessionReady } from './wallet.js';
+import { signerReady } from './wallet.js';
 import type { ExecutionVenue, MarketBook, OrderIntent, OrderResolution, SignedEnvelope, VenueState } from './types.js';
 
 export interface ExchangeContracts {
@@ -71,12 +71,12 @@ export class PolymarketVenue implements ExecutionVenue {
   }
   async state(wallet: string): Promise<VenueState> {
     this.wallet(wallet);
-    const [mode, availableCashMicros, sessionValid, approvals] = await Promise.all([
-      this.evidence.mode(), this.evidence.availableCashMicros(wallet), sessionReady(this.client, this.now()),
+    const [mode, availableCashMicros, signerCanTrade, approvals] = await Promise.all([
+      this.evidence.mode(), this.evidence.availableCashMicros(wallet), signerReady(this.client, this.now()),
       this.client.fetchTradingApprovalsState(),
     ]);
     return { mode, availableCashMicros: integer(availableCashMicros, 'available collateral'),
-      sessionValid, approvalsReady: approvals.isFullyApproved };
+      signerCanTrade, approvalsReady: approvals.isFullyApproved };
   }
   async book(tokenId: string): Promise<MarketBook> {
     if (!/^\d+$/.test(tokenId)) throw new Error('Only decimal CTF-v2 token IDs are supported');
@@ -90,7 +90,7 @@ export class PolymarketVenue implements ExecutionVenue {
   }
   async prepare(wallet: string, intent: OrderIntent): Promise<SignedEnvelope> {
     this.wallet(wallet);
-    if (!(await sessionReady(this.client, this.now()))) throw new Error('Native CLOB session is expired, revoked or out of scope');
+    if (!(await signerReady(this.client, this.now()))) throw new Error('This signer may not trade: not the wallet owner, and no valid CLOB session');
     const book = await this.client.fetchOrderBook({ assetId: intent.tokenId });
     if (book.assetId !== intent.tokenId || book.conditionId !== intent.conditionId || !/^\d+$/.test(intent.tokenId)) {
       throw new Error('Order asset/condition does not match the CTF market');
