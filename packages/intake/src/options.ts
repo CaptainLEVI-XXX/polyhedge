@@ -43,9 +43,48 @@ export interface BasketOption {
  */
 const CHEAP_SHARE = 0.35;
 
-/** Two costs that round to the same dollar are the same basket to a user. */
+/**
+ * Two options are the same to a user when they cost the same AND protect the
+ * same. Collapsing on price alone would hide a genuinely different basket that
+ * happens to cost a similar amount, which is the comparison the stops exist to
+ * make.
+ */
 function distinct(a: QuoteRecord, b: QuoteRecord): boolean {
-  return Math.abs(a.basket.totalCostCents - b.basket.totalCostCents) >= 100;
+  const priceMoved = Math.abs(a.basket.totalCostCents - b.basket.totalCostCents) >= 100;
+  const coverMoved = Math.abs(a.basket.residual.coverageRatio - b.basket.residual.coverageRatio) >= 0.005;
+  return priceMoved || coverMoved;
+}
+
+/**
+ * Every stop prices against ONE book snapshot.
+ *
+ * Solving three times through the caller's deps would fetch books three times,
+ * so the three prices would be taken at three different moments and would not
+ * be strictly comparable — which is the one thing the stops are for. The books
+ * are fetched once, memoised by token set, and the snapshot is saved once so
+ * all three records name the same one.
+ */
+function pinBooks(deps: QuoteDeps): QuoteDeps {
+  const books = new Map<string, Promise<Awaited<ReturnType<QuoteDeps['fetchBooks']>>>>();
+  let snapshot: Promise<string> | null = null;
+
+  return {
+    ...deps,
+    fetchEvent: deps.fetchEvent.bind(deps),
+    fetchBooks: (tokenIds) => {
+      const key = tokenIds.join(',');
+      let pending = books.get(key);
+      if (pending === undefined) {
+        pending = deps.fetchBooks(tokenIds);
+        books.set(key, pending);
+      }
+      return pending;
+    },
+    saveSnapshot: (b) => {
+      snapshot ??= deps.saveSnapshot(b);
+      return snapshot;
+    },
+  };
 }
 
 function coverLine(record: QuoteRecord, payoutUsd: number): string {
@@ -71,18 +110,21 @@ export async function buildBasketOptions(
   // Full cover: the same request with no budget cap at all. Note this drops
   // `budgetUsd` rather than setting it high — under `exactOptionalPropertyTypes`
   // an absent budget and a huge one are different things to the engine.
+  const pinned = pinBooks(deps);
   const { budgetUsd, ...uncapped } = request;
-  const full = await quote(uncapped, deps, options);
+  const full = await quote(uncapped, pinned, options);
 
   const out: BasketOption[] = [{
-    name: 'Full cover',
-    reason: `The most this market can cover. ${coverLine(full, payoutUsd)}`,
+    // "Everything", not "Full cover": an uncapped solve is the most this
+    // market's liquidity allows, which is not always all of the loss.
+    name: full.basket.residual.coverageRatio >= 0.999 ? 'Everything' : 'As much as the book allows',
+    reason: `Spends whatever it takes, up to what this market can absorb. ${coverLine(full, payoutUsd)}`,
     record: full,
     residual: full.basket.residual,
   }];
 
   if (budgetUsd !== undefined) {
-    const capped = await quote({ ...request, budgetUsd }, deps, options);
+    const capped = await quote({ ...request, budgetUsd }, pinned, options);
     if (distinct(capped, full)) {
       out.push({
         name: 'Your budget',
@@ -95,11 +137,14 @@ export async function buildBasketOptions(
 
   const cheapUsd = Math.max(1, Math.round((full.basket.totalCostCents / 100) * CHEAP_SHARE));
   if (budgetUsd === undefined || cheapUsd < budgetUsd) {
-    const cheap = await quote({ ...request, budgetUsd: cheapUsd }, deps, options);
+    const cheap = await quote({ ...request, budgetUsd: cheapUsd }, pinned, options);
     if (out.every((o) => distinct(cheap, o.record))) {
       out.push({
-        name: 'Cheapest',
-        reason: `Roughly a third of the cost, and materially less cover. ${coverLine(cheap, payoutUsd)}`,
+        // Not a proven cheapest useful hedge — a stated policy fraction of the
+        // uncapped cost. Naming it "cheapest" would claim an optimisation
+        // nobody ran.
+        name: 'Smaller',
+        reason: `About a third of the uncapped cost, and materially less cover. ${coverLine(cheap, payoutUsd)}`,
         record: cheap,
         residual: cheap.basket.residual,
       });

@@ -1,6 +1,6 @@
 import { createJevEngine } from '@polyhedge/questions';
 import { fetchBooks, fetchEvent } from '@polyhedge/venue';
-import { intake, type IntakeDeps, type IntakeSession } from '@polyhedge/intake';
+import { buildBasketOptions, intake, type IntakeDeps, type IntakeSession } from '@polyhedge/intake';
 import { marketIndex } from '@/lib/markets';
 import { handleRouteError } from '@/lib/errors';
 import { toOptionView, toQuotedView } from '@/lib/view-model';
@@ -86,27 +86,38 @@ export async function POST(request: Request) {
     }
 
     const unit = event.ladder.unit;
+
+    // The stops. Solved together against one pinned snapshot so the three
+    // prices are the same moment and can honestly be read side by side.
+    const stops = await buildBasketOptions(result.record.request, deps);
+
     const view = toQuotedView(
       result.record,
       event,
       [
-        toOptionView('recommended', 'Recommended', '', result.record, unit),
+        ...stops.map((stop, i) =>
+          // Same shape at different budgets, so each record's own coverage is
+          // already measured against the real loss.
+          toOptionView(`stop-${i}`, stop.name, stop.reason, stop.record, unit),
+        ),
         ...result.alternatives.map((alt) =>
-          // An alternative's coverage is re-measured against the PRIMARY's
-          // target. Its own residual always flatters it, so it never crosses.
           toOptionView(alt.kind, alt.kind.replace(/_/g, ' '), alt.reason, alt.record, unit),
         ),
       ],
       result.assumptions,
     );
 
-    // Alternatives change the shape, so their own coverage is not comparable.
-    // Overwrite it with the honest re-measurement before anything is shown.
+    // An alternative CHANGES the shape, so it solves a different target and its
+    // own residual flatters it — a further strike reports perfect coverage for
+    // strictly less protection. Overwrite with the re-measurement against the
+    // original target before anything crosses the wire, because the safest
+    // place to close that trap is the boundary, not every renderer downstream.
     result.alternatives.forEach((alt, i) => {
-      const option = view.options[i + 1];
+      const option = view.options[stops.length + i];
       if (option === undefined) return;
-      option.coverageRatio = alt.residualVsPrimary.coverageRatio;
-      option.coverageLabel = `${Math.floor(Math.max(0, Math.min(1, alt.residualVsPrimary.coverageRatio)) * 100)}%`;
+      const ratio = Math.max(0, Math.min(1, alt.residualVsPrimary.coverageRatio));
+      option.coverageRatio = ratio;
+      option.coverageLabel = `${Math.floor(ratio * 100)}%`;
     });
 
     return Response.json({ result: { kind: 'quoted', view }, indexedCount: index.events.length });
