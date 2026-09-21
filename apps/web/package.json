@@ -14,6 +14,7 @@
     "@polyhedge/intake": "workspace:*",
     "@polyhedge/questions": "workspace:*",
     "@polyhedge/venue": "workspace:*",
+    "@privy-io/react-auth": "^3.44.0",
     "next": "^15.5.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

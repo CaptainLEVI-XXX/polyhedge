@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ladder } from './Ladder';
 import { Allocation } from './Allocation';
-import { readiness, type WalletFacts } from '@/lib/wallet-readiness';
+import { readiness } from '@/lib/wallet-readiness';
+import { useSession } from './Session';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
@@ -93,7 +94,7 @@ export function Studio() {
         <span className="brand">PolyHedge</span>
         <span className="tag">[beta]</span>
         <span className="spacer" />
-        <span className="tag">nothing here places an order</span>
+        <Connect />
       </div>
 
       <div className="narrow-warning note warn" style={{ marginBottom: 16 }}>
@@ -406,17 +407,12 @@ function Review({
     }
   };
 
-  // No wallet connected yet, so every fact below is honestly unknown rather
-  // than assumed true. When Privy lands, these come from the real wallet and
-  // nothing else about this component changes.
-  const facts: WalletFacts = {
-    address: null,
-    provisioned: false,
-    approvalsReady: false,
-    availableMicros: null,
-    pendingDepositMicros: 0,
-  };
-  const ready = readiness(facts, 0);
+  // Signing in proves identity and nothing else. Provisioning, approvals and a
+  // pUSD balance are each their own step, so they stay false and null here
+  // until the thing itself has happened — claiming them would make the UI offer
+  // an order the venue then refuses.
+  const session = useSession();
+  const ready = readiness(session.facts, 0);
 
   if (frozen === null) {
     return (
@@ -538,6 +534,30 @@ function NoMarket({ furthestListed }: { furthestListed: string | null }) {
         about. That substitution is the thing this refuses to make quietly.
       </div>
     </div>
+  );
+}
+
+function Connect() {
+  const session = useSession();
+
+  if (session.status === 'connecting') return <span className="tag">connecting…</span>;
+
+  if (session.address === null) {
+    return (
+      <button onClick={session.login} style={{ padding: '6px 14px' }}>
+        Sign in
+      </button>
+    );
+  }
+
+  const short = `${session.address.slice(0, 6)}…${session.address.slice(-4)}`;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+      <span className="tag">{short}</span>
+      <button onClick={session.logout} style={{ padding: '6px 12px' }}>
+        Sign out
+      </button>
+    </span>
   );
 }
 
