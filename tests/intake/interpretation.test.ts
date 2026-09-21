@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { findNumbers, parseDeadline, parseUnderlying } from '../../packages/intake/src/parse.js';
 import { type QuestionEngine, createMockEngine } from '../../packages/questions/src/index.js';
-import { buildExposureQuestions, extractExposure, UnsupportedUnderlyingError } from '../../packages/intake/src/exposure.js';
+import { buildExposureQuestions, extractExposure } from '../../packages/intake/src/exposure.js';
 import { compile, MissingLevelError } from '../../packages/intake/src/compile.js';
 import { type IndexedEvent } from '../../packages/intake/src/retrieve.js';
 import { type TypedExposure } from '../../packages/intake/src/types.js';
@@ -87,18 +87,29 @@ describe('buildExposureQuestions', () => {
 });
 
 describe('extractExposure', () => {
-  it('throws UnsupportedUnderlyingError for an OTHER underlying without calling the engine', async () => {
+  it('no longer refuses a subject it does not recognise', async () => {
+    // The old behaviour threw unless the text named BTC or ETH, which confined
+    // the product to two assets while the engine can price any ladder the venue
+    // publishes. Whether a market exists is now settled by retrieval and fit, on
+    // evidence — not by an allow-list sitting in front of extraction.
     const today = new Date('2026-09-20T00:00:00Z');
-    const text = 'I hold $40k of SOL, could lose $8k below $60k by Dec 31';
-
+    let asked = 0;
     const engine: QuestionEngine = {
       ask: async () => {
-        throw new Error('engine.ask must not be called for an unsupported underlying');
+        asked += 1;
+        return { answers: {}, modelVersion: 'test' };
       },
     };
 
-    await expect(extractExposure(text, today, engine)).rejects.toBeInstanceOf(UnsupportedUnderlyingError);
+    const result = await extractExposure(
+      'I run outdoor events in Chicago and lose $12,000 if it ends below 62°F',
+      today,
+      engine,
+    );
+    expect(asked).toBe(1);
+    expect(result.candidates.map((c) => c.value)).toContain(12000);
   });
+
 });
 
 function exposure(overrides: Partial<TypedExposure> = {}): TypedExposure {

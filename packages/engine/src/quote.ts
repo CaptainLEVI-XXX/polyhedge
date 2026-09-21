@@ -2,7 +2,7 @@ import {
   buildBasket, buildStateSpace, dollarsToCents, levelsOf, priceMicros,
   type Basket, type BookLevel, type Leg, type TargetShape, type TradableItem,
 } from '@polyhedge/core';
-import { parseBracketTitle, type ClobBook, type GammaEvent } from '@polyhedge/venue';
+import { parseLadder, parseLadderLabel, type ClobBook, type GammaEvent } from '@polyhedge/venue';
 
 export interface QuoteRequest {
   eventId: string;
@@ -73,25 +73,50 @@ function resolveEvent(event: GammaEvent): { items: TradableItem[]; legs: Leg[]; 
     throw new Error(`event ${event.id} is not a neg-risk partition; refusing to quote`);
   }
 
+  // Ordered by the low edge before the ladder is validated: the venue publishes
+  // markets in whatever order it likes, and `parseLadder` checks that brackets
+  // TILE, which is an ordered property. Sorting first means a correct ladder
+  // listed out of order is still priced, while a set with a real hole is still
+  // rejected.
+  const ordered = event.markets
+    .map((m) => ({ market: m, edge: parseLadderLabel(m.groupItemTitle) }))
+    .sort((a, b) => {
+      if (a.edge === null || b.edge === null) return 0;
+      if (a.edge.lo === null) return -1;
+      if (b.edge.lo === null) return 1;
+      return a.edge.lo - b.edge.lo;
+    });
+
+  // One parse for the whole event, not one per market. A bracket title only
+  // means something next to its neighbours: `parseLadder` is what establishes
+  // that these outcomes partition an axis exactly once, which is the assumption
+  // every downstream price depends on.
+  const ladder = parseLadder(ordered.map((o) => o.market.groupItemTitle));
+  if (ladder === null) {
+    throw new Error(
+      `event ${event.id} does not publish a numeric ladder its outcomes tile; refusing to quote`,
+    );
+  }
+
   const items: TradableItem[] = [];
   const legs: Leg[] = [];
   const feeRates: number[] = [];
 
-  for (const m of event.markets) {
-    const bracket = parseBracketTitle(m.groupItemTitle);
-    if (bracket === null) {
-      throw new Error(`market ${m.id} has an unparseable bracket title "${m.groupItemTitle}"`);
+  ordered.forEach(({ market: m }, i) => {
+    const bracket = ladder.brackets[i];
+    if (bracket === undefined) {
+      throw new Error(`event ${event.id} ladder lost bracket ${i}`);
     }
     if (m.feeRate === null) {
       throw new Error(`market ${m.id} reports no fee schedule; fee is unknown, not zero`);
     }
-    items.push({ key: m.id, bracket });
+    items.push({ key: m.id, bracket: { lo: bracket.lo, hi: bracket.hi } });
     // RULING C: marketId is the venue id; the bracket title is a display label.
     legs.push({ id: `${m.id}_yes`, marketId: m.id, label: m.groupItemTitle, tokenId: m.yesTokenId, side: 'YES', tradableKey: m.id });
     feeRates.push(m.feeRate);
     legs.push({ id: `${m.id}_no`, marketId: m.id, label: m.groupItemTitle, tokenId: m.noTokenId, side: 'NO', tradableKey: m.id });
     feeRates.push(m.feeRate);
-  }
+  });
 
   return { items, legs, feeRates };
 }

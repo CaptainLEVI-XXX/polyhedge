@@ -4,7 +4,7 @@
 // made per extraction, covering every candidate plus the fixed questions.
 
 import type { Answer, Question, QuestionEngine } from '@polyhedge/questions';
-import { findNumbers, parseDeadline, parseUnderlying, type NumberCandidate } from './parse.js';
+import { findNumbers, parseDeadline, type NumberCandidate } from './parse.js';
 import type { Parsed } from './types.js';
 
 export class UnsupportedUnderlyingError extends Error {
@@ -82,12 +82,17 @@ export function buildExposureQuestions(
   return questions;
 }
 
+/**
+ * Extraction no longer refuses a subject.
+ *
+ * It used to throw unless the text named BTC or ETH, which confined the product
+ * to two assets while the engine could price any ladder the venue publishes.
+ * What the user is exposed to is now settled downstream, by evidence rather than
+ * an allow-list: retrieval narrows to markets sharing the user's own words, and
+ * `fit.ts` asks the model whether a candidate settles on the same thing. A
+ * subject with no listed market fails there, honestly, instead of here.
+ */
 export async function extractExposure(text: string, today: Date, engine: QuestionEngine): Promise<ExtractionResult> {
-  const underlying = parseUnderlying(text);
-  if (underlying === 'OTHER' || underlying === null) {
-    throw new UnsupportedUnderlyingError(`extractExposure: unsupported underlying (${String(underlying)})`);
-  }
-
   const candidates = findNumbers(text);
   const deadline = parseDeadline(text, today);
 

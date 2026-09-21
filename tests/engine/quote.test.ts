@@ -77,7 +77,7 @@ describe('quote', () => {
     await expect(quote(
       { eventId: 'e1', shape: { templateId: 'threshold_digital', payoutUsd: 1, direction: 'below', k: 68000 } },
       deps(bad),
-    )).rejects.toThrow(/unparseable/i);
+    )).rejects.toThrow(/does not publish a numeric ladder/i);
   });
 
   describe('budgetUsd', () => {

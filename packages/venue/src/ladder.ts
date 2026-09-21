@@ -194,7 +194,12 @@ function detectUnit(labels: string[]): string {
  * and pricing it as one would misstate what every state pays.
  */
 export function parseLadder(labels: string[]): Ladder | null {
-  if (labels.length < 3) return null;
+  // Two is the smallest real partition of an axis (`<100` / `>100`), and one
+  // that is perfectly priceable. Discovery separately requires three or more,
+  // because a two-outcome market is rarely a ladder worth hedging with — but
+  // that is a policy about which markets to OFFER, not about what this can
+  // read, and conflating the two made the engine refuse valid partitions.
+  if (labels.length < 2) return null;
 
   const parsed: LadderBracket[] = [];
   for (const label of labels) {

@@ -58,7 +58,7 @@ import { compile, MissingLevelError } from './compile.js';
 import { extractExposure, type ExtractionResult } from './exposure.js';
 import { assessFit, type FitCandidate } from './fit.js';
 import { parseDeadline, parseUnderlying, type NumberCandidate } from './parse.js';
-import { candidatesForText, retrieve, type IndexedEvent } from './retrieve.js';
+import { candidatesForText, retrieve, subjectWords, type IndexedEvent } from './retrieve.js';
 import { selectShape } from './shape.js';
 import {
   addAssumption,
@@ -193,7 +193,7 @@ function leftOut(candidate: NumberCandidate, why: string): string {
 function followUpQuestion(field: string, deadline: Parsed<string> | null): string {
   switch (field) {
     case 'underlying':
-      return 'Which asset are you exposed to? This hedges BTC and ETH.';
+      return 'I could not match that to any market that is listed. What are you exposed to — the thing whose price or level you would lose on?';
     case 'deadline':
       return 'By what date do you need this protection to run? The date is what picks the market — "by Dec 31", for example.';
     case 'deadlineStated':
@@ -263,7 +263,7 @@ export function assembleExposure(
   text: string,
   extraction: ExtractionResult,
   deadline: Parsed<string> | null,
-  underlying: 'BTC' | 'ETH',
+  underlying: string,
   followUpsAsked: number,
   calibration: CalibrationMap = IDENTITY_CALIBRATION,
 ): ExposureAssembly {
@@ -515,31 +515,26 @@ export async function intake(
           return `${fields[a.field] ?? a.field}: ${a.answer}.`;
         })].join(' ');
 
-  // Offline, and first: an unsupported asset costs no model call to find.
-  const underlying = parseUnderlying(sourceText);
-  if (underlying === 'OTHER') {
-    return {
-      kind: 'declined',
-      reason:
-        'This only hedges BTC and ETH. The asset you named is listed elsewhere, and quoting it here would ' +
-        'mean hedging one asset with another.',
-    };
-  }
-  // Naming no asset is a different fact from naming an unsupported one.
-  // `OTHER` means we understood the user and cannot help; `null` means we
-  // did not understand them, which is a question. Declining here would
-  // refuse a user who simply forgot to write "BTC".
-  if (underlying === null) {
+  // Offline, and first. There is no allow-list any more — the engine prices any
+  // ladder the venue publishes — so the question is no longer "is this BTC or
+  // ETH" but "do we list anything that could be about this at all". That is a
+  // word match against already-indexed events, so it still costs no model call,
+  // which is the property the old asset gate was really protecting.
+  //
+  // It asks rather than declines. Matching is lexical, so an empty result means
+  // either the user named nothing or they named it differently from the venue —
+  // and those are not distinguishable here, so the honest move is a question.
+  const listed = candidatesForText(sourceText, deps.events);
+  if (listed.length === 0) {
     return followUpResult(
-      continued === undefined
-        ? newSession(text, deps.newSessionId())
-        : continued,
+      continued === undefined ? newSession(text, deps.newSessionId()) : continued,
       [],
       { rawText: sourceText },
       'underlying',
       followUpQuestion('underlying', null),
     );
   }
+  const underlying = subjectWords(sourceText).slice(0, 3).join(' ');
 
   const deadline = parseDeadline(sourceText, deps.today);
 
@@ -581,10 +576,7 @@ export async function intake(
   // Two filters, in order, both in code. `candidatesForText` narrows hundreds of
   // ladders to the ones plausibly about this subject; `retrieve` then does every
   // date comparison. Neither asks the model anything.
-  const retrieval = retrieve(
-    candidatesForText(exposure.rawText, deps.events),
-    exposure.deadline.value,
-  );
+  const retrieval = retrieve(listed, exposure.deadline.value);
   if (retrieval.kind === 'no_market_listed') {
     return {
       kind: 'no_market_listed',

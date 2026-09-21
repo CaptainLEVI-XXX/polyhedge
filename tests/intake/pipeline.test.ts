@@ -291,20 +291,24 @@ describe('intake', () => {
     expect(result.perpAvailable).toBe(false);
   });
 
-  it('declines an unsupported underlying without spending a model call', async () => {
-    const { deps, engineCalls, sessionIds } = harness(commonAnswers(), [
-      indexed('2026-12-31T17:00:00Z'),
-    ]);
+  it('asks rather than declines when nothing listed matches, and spends no model call', async () => {
+    // The asset allow-list is gone; the offline check it was really providing is
+    // not. Nothing indexed shares a word with this text, so there is nothing to
+    // quote against — and that is knowable from already-indexed events, before
+    // any model call.
+    //
+    // It asks instead of declining because the match is lexical: an empty result
+    // means either the user named nothing or they named it differently from the
+    // venue, and those are not distinguishable here.
+    const { deps, engineCalls } = harness(commonAnswers(), [indexed('2026-12-31T17:00:00Z')]);
 
     const result = await intake(
       "I hold 200 SOL and I'm down $4,000 if it ends below 100 by Dec 31.",
       deps,
     );
 
-    expect(result.kind).toBe('declined');
-    // The point of the test: knowable offline, so it must cost nothing.
+    expect(result.kind).toBe('follow_up');
     expect(engineCalls()).toBe(0);
-    expect(sessionIds()).toBe(0);
   });
 });
 
