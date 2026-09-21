@@ -31,6 +31,7 @@ export const SOLVER_OPTIONS = {
   parallel: 'off',
   threads: 1,
   random_seed: 0,
+  time_limit: 2,
 } as const;
 
 /**

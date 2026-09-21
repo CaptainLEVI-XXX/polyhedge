@@ -1,11 +1,18 @@
+import { createHash } from 'node:crypto';
 import {
-  buildBasket, buildStateSpace, dollarsToCents, levelsOf, priceMicros,
-  type Basket, type BookLevel, type Leg, type TargetShape, type TradableItem, type ProtectionGoal,
+  buildBasket, buildStateSpace, buildCategoricalStateSpace, dollarsToCents, levelsOf, priceMicros,
+  type StateSpace, type Basket, type BookLevel, type Leg, type TargetShape, type TradableItem, type ProtectionGoal,
 } from '@polyhedge/core';
-import { parseLadder, parseLadderLabel, type ClobBook, type GammaEvent } from '@polyhedge/venue';
+import { eventSupport, type EventSelection, type EventSupport, parseLadder, parseLadderLabel, type ClobBook, type GammaEvent } from '@polyhedge/venue';
+
+export class EventQuoteError extends Error {
+  constructor(readonly code:'changed'|'unsupported',message:string){super(message);this.name='EventQuoteError';}
+}
 
 export interface QuoteRequest {
   eventId: string;
+  selection?: EventSelection;
+  ruleHash?: string;
   shape: TargetShape;
   budgetUsd?: number;
   /** Extra split points beyond the shape's own levels. */
@@ -35,9 +42,11 @@ export interface QuoteMeta {
 }
 
 export interface QuoteRecord {
-  version: 1;
+  version: 1 | 2;
   request: QuoteRequest;
   resolved: {
+    domain?: EventSupport;
+    evidenceHash?: string;
     items: TradableItem[];
     legs: Leg[];
     feeRates: number[];
@@ -52,6 +61,9 @@ export interface QuoteDeps {
   fetchBooks(tokenIds: string[]): Promise<ClobBook[]>;
   saveSnapshot(books: ClobBook[]): Promise<string>;
   now?: () => Date;
+  /** Server deadline, never accepted as a client quote field. */
+  deadlineAt?: number;
+  signal?: AbortSignal;
 }
 
 export interface QuoteOptions {
@@ -82,6 +94,9 @@ function executionConstraints(request: QuoteRequest, legs: Leg[], byToken: Map<s
  * complement when the book prices it better.
  */
 function resolveEvent(event: GammaEvent): { items: TradableItem[]; legs: Leg[]; feeRates: number[] } {
+  if(event.markets.some(m=>/bps?\s+(decrease|increase|cut|hike)/i.test(m.groupItemTitle) && /rounded up to the nearest 25/.test(m.description))) {
+    throw new EventQuoteError('unsupported','This rounded decision market requires explicit outcome losses; use the event picker.');
+  }
   if (!event.negRisk) {
     throw new Error(`event ${event.id} is not a neg-risk partition; refusing to quote`);
   }
@@ -139,17 +154,32 @@ export async function quote(
   deps: QuoteDeps,
   options?: QuoteOptions,
 ): Promise<QuoteRecord> {
+  const checkDeadline=()=>{deps.signal?.throwIfAborted();if(deps.deadlineAt!==undefined && Date.now()>=deps.deadlineAt)throw new Error('quote_deadline');};
+  checkDeadline();
   const event = await deps.fetchEvent(request.eventId);
-  const { items, legs, feeRates } = resolveEvent(event);
+  checkDeadline();
+  const domain = request.selection ? eventSupport(event, request.selection) : undefined;
+  if(domain && !domain.eligible) throw new EventQuoteError('unsupported',domain.reason ?? 'Unsupported event');
+  if(domain && request.ruleHash !== domain.ruleHash)throw new EventQuoteError('changed','Market rules changed; refresh the details and confirm your losses again.');
+  const { items, legs, feeRates } = domain && domain.kind !== 'numeric' ? resolveOutcomes(event, domain) : resolveEvent(event);
 
   const books = await deps.fetchBooks(legs.map((l) => l.tokenId));
+  if (domain) {
+    const seen = new Set(books.map(b => b.assetId));
+    if (seen.size !== books.length || books.length !== legs.length) throw new Error('Incomplete or duplicate books');
+    for (const leg of legs) {
+      const b = books.find(b => b.assetId === leg.tokenId);
+      const o = domain.outcomes.find(o => o.marketId === leg.marketId);
+      if (!b || !o || b.market.toLowerCase() !== o.conditionId.toLowerCase()) throw new Error('Book condition does not match the selected event');
+    }
+  }
   const snapshotId = await deps.saveSnapshot(books);
   const byToken = new Map(books.map((b) => [b.assetId, b]));
 
-  const stateSpace = buildStateSpace(
-    items,
-    [...levelsOf(request.shape), ...(request.extraLevels ?? [])],
-  );
+  const stateSpace = domain && domain.kind !== 'numeric'
+    ? buildCategoricalStateSpace(domain.outcomes.map(o => ({ key:o.id, label:o.label })))
+    : buildStateSpace(items, [...levelsOf(request.shape), ...(request.extraLevels ?? [])]);
+  if (domain && (domain.kind === 'numeric') === (request.shape.templateId === 'outcome_losses')) throw new Error('Target and event type disagree');
 
   const ruleFlags = options?.ruleFlags ?? [];
   const correlationResidual = options?.correlationResidual ?? false;
@@ -157,6 +187,7 @@ export async function quote(
   const jevModelVersion = options?.jevModelVersion ?? 'unknown';
   const now = deps.now ?? (() => new Date());
 
+  checkDeadline();
   const basket = await buildBasket({
     shape: request.shape,
     stateSpace,
@@ -171,10 +202,11 @@ export async function quote(
     ...executionConstraints(request, legs, byToken),
   });
 
+  checkDeadline();
   return {
-    version: 1,
+    version: domain ? 2 : 1,
     request,
-    resolved: { items, legs, feeRates, snapshotId },
+    resolved: { ...(domain ? { domain, evidenceHash:evidenceHash({domain,items,legs,feeRates}) } : {}), items, legs, feeRates, snapshotId },
     basket,
     meta: {
       quotedAt: now().toISOString(),
@@ -189,10 +221,7 @@ export async function quote(
 /** Re-solve a stored quote from its pinned books. No network. */
 export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Basket> {
   const byToken = new Map(books.map((b) => [b.assetId, b]));
-  const stateSpace = buildStateSpace(
-    record.resolved.items,
-    [...levelsOf(record.request.shape), ...(record.request.extraLevels ?? [])],
-  );
+  const stateSpace = quoteStateSpace(record);
   return buildBasket({
     shape: record.request.shape,
     stateSpace,
@@ -208,4 +237,39 @@ export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Ba
     ...(record.request.protectionGoal ? { protectionGoal: record.request.protectionGoal } : {}),
     ...executionConstraints(record.request, record.resolved.legs, byToken),
   });
+}
+
+function evidenceHash(evidence: {domain: EventSupport;items:TradableItem[];legs:Leg[];feeRates:number[]}):string {
+  return createHash('sha256').update(JSON.stringify(evidence)).digest('hex');
+}
+export function quoteStateSpace(record: QuoteRecord): StateSpace {
+  if (record.version !== 1 && record.version !== 2) throw new Error('Unsupported quote version');
+  const d = record.resolved.domain;
+  if (record.version === 1 && (d || record.request.selection)) throw new Error('Unsupported legacy event record');
+  if (record.version === 2 && (!d || !d.eligible || d.ruleHash !== record.request.ruleHash || d.kind !== record.request.selection?.kind ||
+    record.resolved.evidenceHash !== evidenceHash({domain:d,items:record.resolved.items,legs:record.resolved.legs,feeRates:record.resolved.feeRates}))) throw new Error('Invalid pinned market evidence');
+  return d && d.kind !== 'numeric' ? buildCategoricalStateSpace(d.outcomes.map(o => ({ key:o.id, label:o.label })))
+    : buildStateSpace(record.resolved.items, [...levelsOf(record.request.shape), ...(record.request.extraLevels ?? [])]);
+}
+function resolveOutcomes(event: GammaEvent, domain: EventSupport) {
+  const items: TradableItem[] = domain.outcomes.map(o => ({ key:o.id, bracket:{ lo:null, hi:null } }));
+  const legs: Leg[] = [];
+  const feeRates: number[] = [];
+  for (const id of domain.marketIds) {
+    const m = event.markets.find(m => m.id === id)!;
+    const key = domain.outcomes.find(o => o.marketId === id && o.side === 'YES')!.id;
+    for (const side of ['YES','NO'] as const) {
+      legs.push({ id:`${id}_${side.toLowerCase()}`, marketId:id, label:domain.kind === 'binary' ? m.question : m.groupItemTitle,
+        tokenId:side === 'YES' ? m.yesTokenId : m.noTokenId, side, tradableKey:key });
+      feeRates.push(m.feeRate!);
+    }
+  }
+  return { items, legs, feeRates };
+}
+export async function revalidateQuote(record: QuoteRecord, fetchEvent: QuoteDeps['fetchEvent']): Promise<void> {
+  quoteStateSpace(record);
+  if (record.version !== 2) return;
+  if (!record.request.selection || !record.resolved.domain) throw new Error('Missing event selection');
+  const current = eventSupport(await fetchEvent(record.request.eventId), record.request.selection);
+  if (!current.eligible || current.ruleHash !== record.request.ruleHash) throw new EventQuoteError('changed','Market rules or availability changed; rebuild the hedge.');
 }

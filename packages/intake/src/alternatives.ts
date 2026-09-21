@@ -297,6 +297,7 @@ export async function buildAlternatives(
 ): Promise<Alternative[]> {
   const resolvedOptions = inheritedOptions(primary, options);
   const shape = primary.request.shape;
+  if (shape.templateId === 'outcome_losses') return [];
   const payoutCents = dollarsToCents(shape.payoutUsd);
   const alternatives: Alternative[] = [];
 

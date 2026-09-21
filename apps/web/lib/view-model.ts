@@ -1,4 +1,4 @@
-import type { QuoteRecord } from '@polyhedge/engine';
+import { quoteStateSpace, type QuoteRecord } from '@polyhedge/engine';
 import type { IndexedEvent } from '@polyhedge/intake';
 import { buildStateSpace, levelsOf, targetVector, type Basket } from '@polyhedge/core';
 import { costLabel, coverageLabel, levelLabel, payoutLabel, shortfallLabel } from './money.js';
@@ -52,6 +52,7 @@ export interface PayoutRowView {
 }
 
 export interface LadderView {
+  kind?: 'numeric' | 'binary' | 'categorical';
   positions: PositionRowView[];
   /**
    * How many of these can pay at once — DERIVED, never fixed copy.
@@ -169,10 +170,7 @@ function payoutRows(record: QuoteRecord, unit: string): PayoutRowView[] {
   // items and the shape's levels, so recomputing it here cannot disagree with
   // what was solved, and shipping it through the record would be a second
   // source of truth for the same thing.
-  const stateSpace = buildStateSpace(record.resolved.items, [
-    ...levelsOf(record.request.shape),
-    ...(record.request.extraLevels ?? []),
-  ]);
+  const stateSpace = quoteStateSpace(record);
   const { target } = targetVector(record.request.shape, stateSpace);
   const achievable = record.basket.achievable;
 
@@ -201,7 +199,7 @@ export function toOptionView(
 ): CoverOptionView {
   const basket = record.basket;
   const residual = basket.residual;
-  const payoutUsd = 'payoutUsd' in record.request.shape ? record.request.shape.payoutUsd : 0;
+  const payoutUsd = Math.max(0, ...record.basket.target) / 100;
   const positions = heldPositions(basket, questionFor, linkFor);
 
   return {
@@ -211,9 +209,9 @@ export function toOptionView(
     costLabel: costLabel(basket.totalCostCents),
     costUsd: Number(basket.totalCostCents) / 100,
     payoutUsd,
-    coverageLabel: coverageLabel(residual.coverageRatio),
+    coverageLabel: record.resolved.domain && record.resolved.domain.kind !== 'numeric' ? 'See outcomes' : coverageLabel(residual.coverageRatio),
     coverageRatio: residual.coverageRatio,
-    paysLabel: payoutLabel(payoutUsd * residual.coverageRatio),
+    paysLabel: record.resolved.domain && record.resolved.domain.kind !== 'numeric' ? 'Varies by outcome' : payoutLabel(payoutUsd * residual.coverageRatio),
     shortfallLabel: shortfallLabel(Number(residual.worstStateShortfallCents)),
     shortfallWhere: residual.worstStateLabel,
     netLossLabel: costLabel(Math.max(0, ...payoutRows(record, unit)
@@ -223,6 +221,7 @@ export function toOptionView(
     beyondOwedLabel: costLabel(Number(residual.crossStateOverhedgeCents)),
     withinBracketLabel: costLabel(Number(residual.overhedgeCents)),
     ladder: {
+      kind: record.resolved.domain?.kind ?? 'numeric',
       positions,
       exclusivity: positions.every((p) => p.side === 'YES') ? 'exactly_one' : 'several',
       payout: payoutRows(record, unit),
@@ -301,4 +300,13 @@ export function toQuotedView(
       calibrationIsFitted: record.meta.calibrationMapVersion !== 'unfitted',
     },
   };
+}
+
+export function toEventQuotedView(record: QuoteRecord, options: CoverOptionView[], assumptions: string[]): QuotedView {
+  const d = record.resolved.domain;
+  if (!d) throw new Error('Missing event evidence');
+  return { statement:d.title, parsed:{subject:d.title,settlesLabel:d.observationAt,
+    exposureLabel:d.kind==='numeric'?describeShape(record,d.unit):'Your confirmed loss by outcome',budgetLabel:record.request.budgetUsd===undefined?null:`$${record.request.budgetUsd}`},
+    event:{title:d.title,settlesLabel:d.observationAt,observationSource:'endDate',outcomeCount:d.outcomes.length},
+    options,assumptions,provenance:{model:'Structured selection',calibration:'Not used',calibrationIsFitted:false}};
 }

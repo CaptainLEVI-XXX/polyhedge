@@ -59,7 +59,7 @@ export function Basket({
         <div>
           <div className="card-name">{option.name}</div>
           <h2 className="statement" style={{ marginTop: 'var(--s2)' }}>
-            {option.costLabel} to cover {option.paysLabel}
+            {option.ladder.kind && option.ladder.kind !== 'numeric' ? `${option.costLabel} for this outcome hedge` : `${option.costLabel} to cover ${option.paysLabel}`}
           </h2>
           <p className="lede">{option.reason}</p>
         </div>
@@ -70,7 +70,7 @@ export function Basket({
       <section className="section">
         <h3>
           What you are left with
-          <span className="aside">at every settlement price, after the premium</span>
+          <span className="aside">for each settlement outcome, after the premium</span>
         </h3>
         <HedgeCurve option={option} />
       </section>
@@ -150,12 +150,12 @@ export function Basket({
         <Allocation ladder={option.ladder} />
       </section>
 
-      <Disclosure
+      {(!option.ladder.kind || option.ladder.kind === 'numeric') && <Disclosure
         title="What it pays, range by range"
         aside={`${option.ladder.payout.length} price ranges over ${option.ladder.consideredCount / 2} brackets`}
       >
         <Ladder ladder={option.ladder} />
-      </Disclosure>
+      </Disclosure>}
 
       {view.assumptions.length > 0 && (
         <section className="section">
@@ -304,6 +304,7 @@ function Review({
     }
   };
 
+  if(option.ladder.heldCount===0)return <p className="note">The best basket under these limits buys no positions. See the remaining loss above; no orders are needed.</p>;
   if (frozen === null) {
     return (
       <div className="section">

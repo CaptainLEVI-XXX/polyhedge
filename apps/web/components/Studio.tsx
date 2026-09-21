@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { Connect } from './Session';
+import { StructuredBuilder } from './StructuredBuilder';
 import { Basket } from './Basket';
 import { Cards } from './Cards';
 import type { QuotedView } from '@/lib/view-model';
@@ -46,6 +47,8 @@ export function Studio() {
   const [result, setResult] = useState<Result | null>(null);
   const [opened, setOpened] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [structuredBusy,setStructuredBusy]=useState(false);
+  const [mode, setMode] = useState<'structured'|'text'>('structured');
   const [text, setText] = useState('');
   const [lossLimit, setLossLimit] = useState('');
   const [maxLegs, setMaxLegs] = useState('');
@@ -109,37 +112,18 @@ export function Studio() {
   const quoted = result?.kind === 'quoted' ? result : null;
   const open = quoted !== null && opened !== null ? quoted.view.options[opened] : undefined;
 
-  // Inside a basket: nothing else on screen competes with it.
-  if (quoted !== null && open !== undefined) {
-    return (
-      <div className="wrap">
-        <Bar />
-        <Basket
-          quoteId={quoted.quoteId}
-          view={quoted.view}
-          index={opened as number}
-          onBack={() => setOpened(null)}
-        />
-        <Foot />
-      </div>
-    );
-  }
-
-  return (
-    <div className="wrap">
+  const basketOpen = quoted !== null && open !== undefined;
+  return <>
+    {basketOpen && <div className="wrap"><Bar /><Basket quoteId={quoted.quoteId} view={quoted.view}
+      index={opened as number} onBack={()=>setOpened(null)} /><Foot /></div>}
+    <div className="wrap" hidden={basketOpen}>
       <Bar />
-
-      <div className="narrow-warning note warn" style={{ marginBottom: 'var(--s5)' }}>
-        This is built for a screen at least 1024px wide. Below that the ladder is a different
-        design that does not exist yet, and shrinking this one would misrepresent it.
-      </div>
 
       {turns.length === 0 && (
         <div style={{ marginBottom: 'var(--s6)' }}>
-          <h1 className="statement">Describe what you would lose.</h1>
+          <h1 className="statement">Choose what you want to protect.</h1>
           <p className="lede">
-            Plain words are enough. What comes back is a small number of complete baskets, each
-            priced against the live book, each saying what it does not cover.
+            Select a listed event and enter what you would lose. See the cost of protection and the loss that remains.
           </p>
         </div>
       )}
@@ -158,6 +142,9 @@ export function Studio() {
         </div>
       )}
 
+      <div className="chips"><button disabled={busy||structuredBusy} onClick={()=>setMode('structured')}>Select an event</button><button disabled={busy||structuredBusy} onClick={()=>setMode('text')}>Describe in words</button></div>
+      {mode === 'structured' && <StructuredBuilder onBusyChange={setStructuredBusy} onQuote={(quoteId,view)=>{setResult({kind:'quoted',quoteId,view});setOpened(null);session.current=undefined;}} />}
+      {mode === 'text' && <>
       <div className="composer">
         <label htmlFor="exposure" className="sr-only" style={SR_ONLY}>
           Describe what you would lose
@@ -202,6 +189,8 @@ export function Studio() {
         </div>
       )}
 
+      </>}
+
       {busy && (
         <div className="section empty">
           <span className="spin" />
@@ -210,7 +199,7 @@ export function Studio() {
       )}
 
       {!busy && quoted !== null && (
-        <Cards view={quoted.view} onOpen={setOpened} onRefine={(t) => setText(t)} />
+        <Cards view={quoted.view} onOpen={setOpened} onRefine={(t) => {if(mode==='text')setText(t);else document.querySelector('.structured-builder')?.scrollIntoView({behavior:'smooth'});}} />
       )}
 
       {!busy && result?.kind === 'no_market_listed' && (
@@ -233,7 +222,7 @@ export function Studio() {
 
       <Foot />
     </div>
-  );
+  </>;
 }
 
 const SR_ONLY = {

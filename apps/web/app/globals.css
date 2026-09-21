@@ -324,3 +324,13 @@ a.venue {
 a.venue:hover { color: var(--action); border-bottom-color: var(--action); }
 a.venue .out { color: var(--faint); font-size: 10px; margin-left: 4px; }
 a.venue:hover .out { color: var(--action); }
+
+.structured-builder { margin: 24px 0; }
+.event-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin: 16px 0; }
+.event-filters label { display: flex; flex-direction: column; gap: 6px; }
+.event-filters input, .event-filters select { width: 100%; padding: 10px; border: 1px solid #ccc; background: white; color: #222; font: inherit; }
+.event-results { display: grid; gap: 8px; max-height: 430px; overflow: auto; }
+.event-results button { text-align: left; padding: 14px; border: 1px solid #ddd; background: white; color: inherit; }
+.event-results button span { display: block; margin-top: 4px; }
+.structured-builder fieldset { border: 1px solid #ddd; padding: 20px; }
+@media(max-width:700px) { .event-filters { grid-template-columns: 1fr; } .structured-builder fieldset { padding: 12px; } }

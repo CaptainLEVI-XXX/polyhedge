@@ -85,6 +85,7 @@ export function buildStateSpace(items: TradableItem[], levels: number[]): StateS
 export function buildCategoricalStateSpace(
   items: { key: string; label: string }[],
 ): StateSpace {
+  if (items.length === 0 || new Set(items.map(i => i.key)).size !== items.length) throw new Error('Categorical outcomes must be distinct and complete');
   return {
     tradable: items.map((i) => ({
       key: i.key, label: i.label, bracket: { lo: null, hi: null },

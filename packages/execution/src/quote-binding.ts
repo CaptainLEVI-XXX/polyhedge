@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { QuoteRecord } from '@polyhedge/engine';
+import { quoteStateSpace, type QuoteRecord } from '@polyhedge/engine';
 import type { ClobBook } from '@polyhedge/venue';
 import type { ExecutionLeg, SelectedQuote } from './types.js';
 
@@ -18,6 +18,7 @@ export interface BoundQuote { record: QuoteRecord; assumptions: string[]; select
 
 /** Call on a server-owned QuoteRecord and its pinned snapshot before showing confirmation. */
 export function bindQuote(record: QuoteRecord, books: ClobBook[], assumptions: string[]): BoundQuote {
+  quoteStateSpace(record);
   // Same encoding used by venue/saveSnapshot. Verify contents, not just the filename.
   const snapshotId = createHash('sha256').update(JSON.stringify([...books].sort((a,b) => a.assetId.localeCompare(b.assetId)))).digest('hex');
   if (snapshotId !== record.resolved.snapshotId) throw new Error('Books do not match the accepted quote snapshot');
@@ -30,6 +31,8 @@ export function bindQuote(record: QuoteRecord, books: ClobBook[], assumptions: s
     if (!Number.isSafeInteger(sharesMicros) || sharesMicros <= 0 || Math.abs(sharesMicros / 1_000_000 - leg.shares) > 1e-10) throw new Error('Invalid quoted quantity');
     const book = byToken.get(leg.tokenId);
     if (!book || !/^0x[0-9a-fA-F]{64}$/.test(book.market)) throw new Error('Snapshot lacks a verified condition ID');
+    const outcome = record.resolved.domain?.outcomes.find(o => o.marketId === leg.marketId);
+    if (record.version === 2 && (!outcome || outcome.conditionId.toLowerCase() !== book.market.toLowerCase() || leg.tokenId !== (leg.side === 'YES' ? outcome.yesTokenId : outcome.noTokenId))) throw new Error('Pinned event and execution condition disagree');
     let remaining = sharesMicros;
     let referencePriceMicros = 0;
     for (const level of [...book.asks].sort((a,b) => a.priceMicros - b.priceMicros)) {
@@ -41,7 +44,7 @@ export function bindQuote(record: QuoteRecord, books: ClobBook[], assumptions: s
       if (remaining === 0) break;
     }
     if (remaining > 0) throw new Error('Pinned quote lacks executable depth');
-    return { id: leg.legId, tokenId: leg.tokenId, conditionId: book.market, outcome: leg.side, sharesMicros, referencePriceMicros };
+    return { ...(outcome && record.request.selection && record.request.ruleHash ? {eventEvidence:{eventId:record.request.eventId,...record.request.selection,ruleHash:record.request.ruleHash,negRisk:outcome.negRisk}} : {}), id: leg.legId, tokenId: leg.tokenId, conditionId: book.market, outcome: leg.side, sharesMicros, referencePriceMicros };
   });
   if (!legs.length) throw new Error('Cannot confirm an empty quote');
   return structuredClone({ record, assumptions, selected: { hash: quoteDigest(record, assumptions, legs), legs } });

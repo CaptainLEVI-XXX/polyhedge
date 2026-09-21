@@ -19,6 +19,11 @@ export async function registerBasket(basket: SettlementBasket, descriptors: Cond
     const descriptor = descriptors.find(c => c.conditionId.toLowerCase() === p.conditionId.toLowerCase());
     if (!descriptor || p.tokenId !== (p.outcome === 'YES' ? descriptor.yesTokenId : descriptor.noTokenId)) throw new Error('Position lacks matching condition metadata');
   }
+  const required = new Set(basket.quote.resolved.domain?.outcomes.map(o => o.conditionId.toLowerCase()) ?? []);
+  for (const o of basket.quote.resolved.domain?.outcomes ?? []) {
+    const d=descriptors.find(d=>d.conditionId.toLowerCase()===o.conditionId.toLowerCase());
+    if(!d || d.yesTokenId!==o.yesTokenId || d.noTokenId!==o.noTokenId || d.negRisk!==o.negRisk) throw new Error('Missing accepted outcome observation metadata');
+  }
   const existingBasket = await deps.store.getBasket(basket.id);
   const identity = (b: SettlementBasket) => { const { revision: _revision, observation: _observation, ...fixed } = b; return JSON.stringify(fixed); };
   if (existingBasket && identity(existingBasket) !== identity(basket)) throw new Error('Basket identity already registered with different data');
@@ -28,7 +33,7 @@ export async function registerBasket(basket: SettlementBasket, descriptors: Cond
   // A retry of the same identity resumes missing condition registrations after a crash.
   for (const descriptor of descriptors) {
     const positions = basket.positions.filter(p => p.conditionId.toLowerCase() === descriptor.conditionId.toLowerCase());
-    if (!positions.length) continue;
+    if (!positions.length && !required.has(descriptor.conditionId.toLowerCase())) continue;
     const key = conditionKey(basket.wallet, descriptor.conditionId);
     await deps.store.withConditionLock(key, async () => {
       const current = await deps.store.getCondition(key);
@@ -42,6 +47,7 @@ export async function registerBasket(basket: SettlementBasket, descriptors: Cond
         if (JSON.stringify(registered) !== JSON.stringify(positions)) throw new Error('Registered position quantities changed');
         return;
       }
+      if (!positions.length) return;
       if (current.payout || current.redemptions.length) throw new Error('Cannot add holdings after settlement started');
       await persistCondition(deps, { ...current, positions: [...current.positions, ...positions] });
     });
@@ -50,7 +56,7 @@ export async function registerBasket(basket: SettlementBasket, descriptors: Cond
 async function loadBasket(id: string, deps: SettlementDeps) {
   const basket = await deps.store.getBasket(id);
   if (!basket) throw new Error(`Unknown basket ${id}`);
-  const keys = [...new Set(basket.positions.map(p => conditionKey(p.wallet, p.conditionId)))];
+  const keys = [...new Set([...basket.positions.map(p => conditionKey(p.wallet, p.conditionId)), ...(basket.quote.resolved.domain?.outcomes.map(o => conditionKey(basket.wallet,o.conditionId)) ?? [])])];
   const conditions: ConditionRecord[] = [];
   for (const key of keys) {
     const c = await deps.store.getCondition(key);

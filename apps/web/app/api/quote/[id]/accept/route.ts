@@ -1,4 +1,6 @@
-import { acceptQuote, NotYours, QuoteImmutable } from '@/lib/store';
+import { fetchEvent } from '@polyhedge/venue';
+import { revalidateQuote, EventQuoteError } from '@polyhedge/engine';
+import { getQuote, acceptQuote, NotYours, QuoteImmutable } from '@/lib/store';
 import { requireCaller, readJsonBody } from '@/lib/identity';
 import { handleRouteError } from '@/lib/errors';
 
@@ -19,6 +21,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const body = await readJsonBody(request, 2048) as { optionId?: unknown };
     if (!body || typeof body.optionId !== 'string') throw new Error('bad_request: select a basket');
+    const previous=await getQuote(id,caller.id);
+    if(previous.acceptedAt===null) {
+      const selected=previous.optionRecords?.[body.optionId] ?? previous.record;
+      await revalidateQuote(selected,fetchEvent);
+    }
     const accepted = await acceptQuote(id, caller.id, body.optionId);
     return Response.json({
       quoteId: accepted.id,
@@ -27,6 +34,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       quotedAt: accepted.record.meta.quotedAt,
     });
   } catch (error) {
+    if(error instanceof EventQuoteError)return Response.json({error:error.message},{status:409});
     if (error instanceof QuoteImmutable) return Response.json({ error: 'Another basket was already pinned.' }, { status: 409 });
     if (error instanceof Error && error.message.startsWith('bad_request')) {
       return Response.json({ error: 'That basket cannot be pinned. Rebuild the quote and select a basket.' }, { status: 400 });

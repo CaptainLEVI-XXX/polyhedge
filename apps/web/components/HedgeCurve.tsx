@@ -44,6 +44,10 @@ function level(value: number, unit: string): string {
 export function HedgeCurve({ option }: { option: CoverOptionView }) {
   const rows = option.ladder.payout;
   if (rows.length === 0) return null;
+  if (option.ladder.kind && option.ladder.kind !== 'numeric') return <div style={{overflowX:'auto'}}><table>
+    <thead><tr><th>Outcome</th><th>Your stated loss</th><th>Hedge pays</th><th>Loss after premium</th></tr></thead>
+    <tbody>{rows.map((r,i)=><tr key={i}><td>{r.label}</td><td>${r.owedUsd.toFixed(2)}</td><td>${r.paidUsd.toFixed(2)}</td><td>${(r.owedUsd+option.costUsd-r.paidUsd).toFixed(2)}</td></tr>)}</tbody>
+  </table></div>;
 
   const finite = rows.flatMap((r) => [r.lo, r.hi]).filter((v): v is number => v !== null);
   if (finite.length === 0) return null;

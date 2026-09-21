@@ -190,7 +190,7 @@ describe('intake', () => {
     const second = await intake('8000', h.deps, first.session);
     expect(second.kind).toBe('quoted');
     if (second.kind !== 'quoted') throw new Error('expected quote');
-    expect(second.record.request.shape.payoutUsd).toBe(8000);
+    expect(second.record.request.shape).toMatchObject({ payoutUsd: 8000 });
     expect(second.record.request.budgetUsd).toBe(300);
   });
 

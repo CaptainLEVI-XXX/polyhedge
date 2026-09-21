@@ -1,3 +1,4 @@
+import { eventSupport, fetchEvent } from '@polyhedge/venue';
 import { OrderSide, OrderType, SignatureType, type SecureClient, type SignedOrder } from '@polymarket/client';
 import { hashTypedData, type Address } from 'viem';
 import { integer, mulDiv } from './order.js';
@@ -94,6 +95,14 @@ export class PolymarketVenue implements ExecutionVenue {
     const book = await this.client.fetchOrderBook({ assetId: intent.tokenId });
     if (book.assetId !== intent.tokenId || book.conditionId !== intent.conditionId || !/^\d+$/.test(intent.tokenId)) {
       throw new Error('Order asset/condition does not match the CTF market');
+    }
+    const evidence = intent.eventEvidence;
+    if (evidence) {
+      if (book.negRisk !== evidence.negRisk) throw new Error('Market exchange changed');
+      if (intent.side === 'BUY') {
+        const current=eventSupport(await fetchEvent(evidence.eventId),{kind:evidence.kind,...(evidence.marketId?{marketId:evidence.marketId}:{})});
+        if(!current.eligible || current.ruleHash!==evidence.ruleHash) throw new Error('Market rules changed before signing');
+      }
     }
     const order = await this.client.createLimitOrder({ assetId: intent.tokenId,
       side: intent.side === 'BUY' ? OrderSide.BUY : OrderSide.SELL,

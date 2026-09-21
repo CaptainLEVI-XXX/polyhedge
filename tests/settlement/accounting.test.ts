@@ -16,6 +16,9 @@ describe('realized settlement accounting', () => {
     expect(accountBasket(basket, [state])).toMatchObject({ targetMicros: 5_000_000, shortfallMicros: 1_000_000, boundAssessment: 'within', netMicros: 2_000_000 });
     state.redemptions[0]!.allocations[0]!.payoutMicros = 2_000_000;
     expect(accountBasket(basket, [state]).boundAssessment).toBe('exceeded');
+    basket.quote.request.shape = {templateId:'threshold_digital',payoutUsd:10,direction:'below',k:0};
+    basket.observation.price=-5;
+    expect(accountBasket(basket,[state]).targetMicros).toBe(10_000_000);
   });
 
   it('returns unknown for absent/mismatched observations and unresolved conditions', async () => {

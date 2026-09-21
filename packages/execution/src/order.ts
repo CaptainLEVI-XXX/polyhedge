@@ -71,6 +71,6 @@ export function buildOrder(
   const notional = mulDiv(leg.sharesMicros, limitPriceMicros, SCALE, side === 'BUY');
   const fee = mulDiv(notional, book.feeBps, 10_000, true);
   const maxCashMicros = side === 'BUY' ? integer(notional + fee, 'maximum debit') : Math.max(0, notional - fee);
-  return { tokenId: leg.tokenId, conditionId: leg.conditionId, outcome: leg.outcome, side,
+  return { ...(leg.eventEvidence ? {eventEvidence:leg.eventEvidence} : {}), tokenId: leg.tokenId, conditionId: leg.conditionId, outcome: leg.outcome, side,
     sharesMicros: leg.sharesMicros, limitPriceMicros, maxCashMicros };
 }

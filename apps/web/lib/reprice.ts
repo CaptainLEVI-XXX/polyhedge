@@ -1,3 +1,4 @@
+import { structuredQuote } from './structured-quote.js';
 import { fetchBooks, fetchEvent } from '@polyhedge/venue';
 import { quote, quoteSession } from '@polyhedge/engine';
 import { buildAlternatives, buildBasketOptions } from '@polyhedge/intake';
@@ -45,6 +46,10 @@ export interface Repriced {
 }
 
 export async function reprice(previous: StoredQuote, owner: string): Promise<Repriced> {
+  if (previous.record.version === 2) {
+    const {stored:next,view}=await structuredQuote(previous.record.request,owner,previous.id,previous.revision+1);
+    return {next,view,snapshotId:next.record.resolved.snapshotId,snapshotChanged:next.record.resolved.snapshotId!==previous.record.resolved.snapshotId};
+  }
   const index = await marketIndex();
   const event = index.events.find((e) => e.eventId === previous.record.request.eventId);
   if (event === undefined) throw new MarketGone();

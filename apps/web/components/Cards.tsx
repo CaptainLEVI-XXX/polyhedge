@@ -77,9 +77,9 @@ export function Cards({
                 <span className="v short">{option.shortfallLabel}</span>
               </div>
 
-              <div className="meter" aria-hidden>
+              {(!option.ladder.kind || option.ladder.kind === 'numeric') && <div className="meter" aria-hidden>
                 <span style={{ width: `${Math.min(100, option.coverageRatio * 100)}%` }} />
-              </div>
+              </div>}
 
               <div className="card-go">
                 Open this basket

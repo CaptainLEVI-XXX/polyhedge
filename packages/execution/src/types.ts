@@ -19,6 +19,7 @@ export interface ExecutionLeg {
   sharesMicros: number;
   /** Deepest ask approved in the selected quote, not its average fill price. */
   referencePriceMicros: number;
+  eventEvidence?: {eventId:string;kind:'numeric'|'binary'|'categorical';marketId?:string;ruleHash:string;negRisk:boolean};
 }
 export interface SelectedQuote {
   /** Digest of the entire selected record, including assumptions and rule flags. */
@@ -46,6 +47,7 @@ export interface OrderIntent {
   limitPriceMicros: number;
   /** BUY maximum all-in debit; SELL minimum net credit. */
   maxCashMicros: number;
+  eventEvidence?: ExecutionLeg['eventEvidence'];
 }
 export interface SignedEnvelope { orderId: string; payload: unknown }
 export interface ConfirmedFill {

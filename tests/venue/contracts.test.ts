@@ -117,7 +117,7 @@ const rawMarket = (extra: Record<string, unknown> = {}) => ({
   question: 'Will BTC be less than $68,000?',
   groupItemTitle: '<68,000',
   description: 'Resolves per the Binance 1 minute candle close.',
-  clobTokenIds: '["tok_yes","tok_no"]',
+  clobTokenIds: '["123","456"]',
   outcomePrices: '["0.0005","0.9995"]',
   outcomes: '["Yes","No"]',
   orderPriceMinTickSize: 0.001,
@@ -136,8 +136,8 @@ describe('parseEvent', () => {
   it('extracts both token ids, tick size and fee rate', () => {
     const ev = parseEvent(rawEvent([rawMarket({ feeSchedule: { rate: 0.07, takerOnly: true } })]));
     expect(ev.negRiskMarketId).toBe('0x2cf05');
-    expect(ev.markets[0]!.yesTokenId).toBe('tok_yes');
-    expect(ev.markets[0]!.noTokenId).toBe('tok_no');
+    expect(ev.markets[0]!.yesTokenId).toBe('123');
+    expect(ev.markets[0]!.noTokenId).toBe('456');
     expect(ev.markets[0]!.tickSize).toBe(0.001);
     expect(ev.markets[0]!.feeRate).toBe(0.07);
   });
@@ -152,8 +152,8 @@ describe('parseEvent', () => {
 
   it('parses a normal ["Yes","No"] market', () => {
     const ev = parseEvent(rawEvent([rawMarket({ outcomes: '["Yes","No"]' })]));
-    expect(ev.markets[0]!.yesTokenId).toBe('tok_yes');
-    expect(ev.markets[0]!.noTokenId).toBe('tok_no');
+    expect(ev.markets[0]!.yesTokenId).toBe('123');
+    expect(ev.markets[0]!.noTokenId).toBe('456');
   });
 
   it('throws rather than silently swapping when outcomes are ["No","Yes"]', () => {

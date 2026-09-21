@@ -2,10 +2,11 @@ import { cents, dollarsToCents, type Cents } from './money.js';
 import type { EvalState, StateSpace } from './types.js';
 
 export type TemplateId =
-  | 'binary_protect' | 'categorical_exclude'
+  | 'binary_protect' | 'categorical_exclude' | 'outcome_losses'
   | 'threshold_digital' | 'linear_strip' | 'range_protect' | 'tail_only';
 
 export type TargetShape =
+  | { templateId: 'outcome_losses'; losses: { outcomeId: string; lossCents: number }[] }
   | { templateId: 'binary_protect'; payoutUsd: number; badKey: string }
   | { templateId: 'categorical_exclude'; payoutUsd: number; badKeys: string[] }
   | { templateId: 'threshold_digital'; payoutUsd: number; direction: 'below' | 'above'; k: number }
@@ -15,8 +16,8 @@ export type TargetShape =
 
 export function isCategorical(
   shape: TargetShape,
-): shape is Extract<TargetShape, { templateId: 'binary_protect' | 'categorical_exclude' }> {
-  return shape.templateId === 'binary_protect' || shape.templateId === 'categorical_exclude';
+): shape is Extract<TargetShape, { templateId: 'binary_protect' | 'categorical_exclude' | 'outcome_losses' }> {
+  return shape.templateId === 'binary_protect' || shape.templateId === 'categorical_exclude' || shape.templateId === 'outcome_losses';
 }
 
 /** Levels the state space must split on so the target is exact. */
@@ -89,6 +90,15 @@ export interface TargetVectorResult {
 }
 
 export function targetVector(shape: TargetShape, stateSpace: StateSpace): TargetVectorResult {
+  if (shape.templateId === 'outcome_losses') {
+    const losses = new Map(shape.losses.map(row => [row.outcomeId, row.lossCents]));
+    if (losses.size !== shape.losses.length || losses.size !== stateSpace.tradable.length
+      || shape.losses.some(row => !Number.isSafeInteger(row.lossCents) || row.lossCents < 0)
+      || !stateSpace.tradable.every(s => losses.has(s.key)) || !shape.losses.some(row => row.lossCents > 0)) {
+      throw new Error('Every outcome requires one explicit nonnegative loss; at least one must be positive');
+    }
+    return { target: stateSpace.evals.map(s => cents(losses.get(s.tradableKey)!)), overhedgeCents: cents(0), worstEvalId: null };
+  }
   if (isCategorical(shape)) {
     const bad = new Set(
       shape.templateId === 'binary_protect' ? [shape.badKey] : shape.badKeys,
