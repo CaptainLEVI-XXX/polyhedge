@@ -4,6 +4,7 @@ import { buildBasketOptions, intake, type IntakeDeps, type IntakeSession } from 
 import { marketIndex } from '@/lib/markets';
 import { handleRouteError } from '@/lib/errors';
 import { toOptionView, toQuotedView } from '@/lib/view-model';
+import { putQuote, putSnapshot } from '@/lib/store';
 import { rateLimit, readJsonBody, requireCaller, TooManyRequests } from '@/lib/identity';
 
 /** Node, never Edge: this route solves, and the solver is WASM. */
@@ -66,9 +67,10 @@ export async function POST(request: Request) {
       newSessionId: () => `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       fetchEvent: async (id) => index.byId.get(id) ?? (await fetchEvent(id)),
       fetchBooks,
-      // Snapshots become durable in their own task; a quote that cannot produce
-      // its books later cannot be bound, so this is a placeholder, not a design.
-      saveSnapshot: async () => `unsaved-${Date.now().toString(36)}`,
+      // Durable, because `bindQuote` re-hashes these books against the accepted
+      // record before execution: a quote that cannot produce its books later
+      // cannot be bound, and one nobody can bind cannot be executed.
+      saveSnapshot: putSnapshot,
     };
 
     const result = await intake(text, deps, session);
@@ -125,7 +127,15 @@ export async function POST(request: Request) {
       option.coverageLabel = `${Math.floor(ratio * 100)}%`;
     });
 
-    return Response.json({ result: { kind: 'quoted', view }, indexedCount: index.events.length });
+    // Stored before it is shown. What the user is about to read has to be
+    // retrievable later, exactly as it was, or "what did I agree to" has no
+    // answer once prices move.
+    const stored = await putQuote(caller.id, result.record, view);
+
+    return Response.json({
+      result: { kind: 'quoted', quoteId: stored.id, view },
+      indexedCount: index.events.length,
+    });
   } catch (error) {
     if (error instanceof TooManyRequests) {
       return Response.json(
