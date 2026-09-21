@@ -7,6 +7,7 @@ import { readiness } from '@/lib/wallet-readiness';
 import { useSession } from './Session';
 import { Sparkline } from './Sparkline';
 import { RawData } from './RawData';
+import { useLiveQuote } from '@/lib/use-live-quote';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
@@ -198,8 +199,8 @@ export function Studio() {
 }
 
 function Quoted({
-  view,
-  quoteId,
+  view: initial,
+  quoteId: initialId,
   chosen,
   onChoose,
   frozen,
@@ -212,6 +213,11 @@ function Quoted({
   frozen: { at: string; snapshotId: string } | null;
   onFreeze: (f: { at: string; snapshotId: string } | null) => void;
 }) {
+  // Watched only while unpinned. Pinning closes the stream, which is what makes
+  // "this price no longer moves" a fact about the system rather than a caption.
+  const live = useLiveQuote(initialId, frozen === null);
+  const view = live.view ?? initial;
+  const quoteId = live.quoteId;
   const option = view.options[chosen] ?? view.options[0];
   if (option === undefined) return null;
 
@@ -220,6 +226,7 @@ function Quoted({
       <div className="box">
         <div className="body">
           <h2 className="statement">{view.statement}</h2>
+          {frozen === null && <FeedState live={live} />}
         </div>
       </div>
 
@@ -380,6 +387,52 @@ function Quoted({
  * book behind it holds, and re-pricing is an explicit act that produces a NEW
  * record rather than quietly editing this one.
  */
+/**
+ * What the price on screen is currently worth as a claim.
+ *
+ * A live price and a price from a socket that died four minutes ago look
+ * identical, so this says which one it is. Silence gets named rather than
+ * rendered as calm.
+ */
+function FeedState({ live }: { live: ReturnType<typeof useLiveQuote> }) {
+  const label =
+    live.feed === 'stale'
+      ? 'Lost the feed — this price is the last one we could confirm'
+      : live.feed === 'connecting'
+        ? 'Connecting to the book'
+        : live.reason === null
+          ? 'Live — re-prices when the book behind it moves'
+          : live.moved
+            ? `Re-priced — ${live.reason.replace(/_/g, ' ')}`
+            : `Re-checked — the book had not moved`;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 12,
+        fontSize: 11,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        color: live.feed === 'stale' ? 'var(--short-ink)' : 'var(--muted)',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: live.feed === 'stale' ? 'var(--short-ink)' : 'var(--covered-ink)',
+        }}
+      />
+      {label}
+    </div>
+  );
+}
+
 function Review({
   quoteId,
   option,
