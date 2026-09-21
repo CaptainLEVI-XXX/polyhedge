@@ -3,12 +3,18 @@ import { fetchBooks, fetchEvent } from '@polyhedge/venue';
 import { intake, type IntakeDeps, type IntakeSession } from '@polyhedge/intake';
 import { marketIndex } from '@/lib/markets';
 import { handleRouteError } from '@/lib/errors';
+import { toOptionView, toQuotedView } from '@/lib/view-model';
+import { rateLimit, readJsonBody, requireCaller, TooManyRequests } from '@/lib/identity';
 
 /** Node, never Edge: this route solves, and the solver is WASM. */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const MAX_TEXT = 2_000;
+const MAX_BODY_BYTES = 64 * 1024;
+// Each call is a model round trip plus venue fetches, so this is the endpoint
+// where an unbounded caller costs money rather than just cycles.
+const LIMIT_PER_MINUTE = 12;
 
 interface Body {
   text?: unknown;
@@ -25,7 +31,10 @@ function requireKey(): string {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as Body;
+    const caller = requireCaller(request);
+    rateLimit(caller, 'intake', LIMIT_PER_MINUTE, 60_000);
+
+    const body = (await readJsonBody(request, MAX_BODY_BYTES)) as Body;
     const text = typeof body.text === 'string' ? body.text.trim() : '';
 
     if (text === '') {
@@ -63,8 +72,57 @@ export async function POST(request: Request) {
     };
 
     const result = await intake(text, deps, session);
-    return Response.json({ result, indexedCount: index.events.length });
+
+    // Everything but a quote is already in the plain register and crosses as
+    // it is. A quote does not: the raw record carries token ids, hashes and
+    // engine vocabulary, and its numbers are unrounded.
+    if (result.kind !== 'quoted') {
+      return Response.json({ result, indexedCount: index.events.length });
+    }
+
+    const event = index.events.find((e) => e.eventId === result.record.request.eventId);
+    if (event === undefined) {
+      throw new Error('quoted an event that is no longer indexed');
+    }
+
+    const unit = event.ladder.unit;
+    const view = toQuotedView(
+      result.record,
+      event,
+      [
+        toOptionView('recommended', 'Recommended', '', result.record, unit),
+        ...result.alternatives.map((alt) =>
+          // An alternative's coverage is re-measured against the PRIMARY's
+          // target. Its own residual always flatters it, so it never crosses.
+          toOptionView(alt.kind, alt.kind.replace(/_/g, ' '), alt.reason, alt.record, unit),
+        ),
+      ],
+      result.assumptions,
+    );
+
+    // Alternatives change the shape, so their own coverage is not comparable.
+    // Overwrite it with the honest re-measurement before anything is shown.
+    result.alternatives.forEach((alt, i) => {
+      const option = view.options[i + 1];
+      if (option === undefined) return;
+      option.coverageRatio = alt.residualVsPrimary.coverageRatio;
+      option.coverageLabel = `${Math.floor(Math.max(0, Math.min(1, alt.residualVsPrimary.coverageRatio)) * 100)}%`;
+    });
+
+    return Response.json({ result: { kind: 'quoted', view }, indexedCount: index.events.length });
   } catch (error) {
+    if (error instanceof TooManyRequests) {
+      return Response.json(
+        { error: 'Too many requests. Give it a moment.', code: 'rate_limited' },
+        { status: 429, headers: { 'retry-after': String(error.retryAfterSeconds) } },
+      );
+    }
+    if (error instanceof Error && error.message.startsWith('bad_request')) {
+      return Response.json(
+        { error: 'That request was malformed or too large.', code: 'bad_request' },
+        { status: 400 },
+      );
+    }
     return handleRouteError('api/intake', error);
   }
 }
