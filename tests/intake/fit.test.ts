@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMockEngine, type Answer, type Question, type QuestionEngine } from '../../packages/questions/src/index.js';
+import { parseLadder, type Ladder } from '../../packages/venue/src/index.js';
 import { assessFit, type FitCandidate } from '../../packages/intake/src/fit.js';
 import { type IndexedEvent } from '../../packages/intake/src/retrieve.js';
 import { type TypedExposure } from '../../packages/intake/src/types.js';
@@ -22,13 +23,27 @@ const PLAIN_RESOLUTION =
   'This market resolves Yes if the final Close price of the Binance 1 minute candle for BTC/USDT ' +
   'is less than 68,000.';
 
+// Spans the fixture exposure's 60,000 level, so `ladderCovers` passes in code
+// and these tests exercise the model-driven half of `assessFit`.
+const LADDER_LABELS = ['<56,000', '56,000-58,000', '58,000-60,000', '60,000-62,000', '62,000-64,000', '>64,000'];
+
+function requireLadder(labels: string[]): Ladder {
+  const ladder = parseLadder(labels);
+  if (ladder === null) throw new Error(`test fixture: [${labels.join(', ')}] must parse as a ladder`);
+  return ladder;
+}
+
+const LADDER = requireLadder(LADDER_LABELS);
+
 function indexed(overrides: Partial<IndexedEvent> = {}): IndexedEvent {
   return {
     eventId: '1',
     slug: 'bitcoin-price-on-september-26-2026',
     seriesTicker: 'bitcoin-neg-risk-weekly',
-    underlying: 'BTC',
+    title: 'Bitcoin price on September 26?',
+    ladder: LADDER,
     observationAt: '2026-09-26T16:00:00Z',
+    observationSource: 'endDate',
     endDate: '2026-09-26T16:00:00Z',
     negRisk: true,
     bracketCount: 7,
@@ -37,7 +52,7 @@ function indexed(overrides: Partial<IndexedEvent> = {}): IndexedEvent {
 }
 
 function candidate(i: number, resolutionText = PLAIN_RESOLUTION): FitCandidate {
-  return { event: indexed({ eventId: `e${i}` }), resolutionText };
+  return { event: indexed({ eventId: `e${i}` }), resolutionText, bracketLabels: LADDER_LABELS };
 }
 
 function scoreAnswer(level: number): Answer {

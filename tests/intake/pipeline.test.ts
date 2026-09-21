@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMockEngine, type Answer, type QuestionEngine } from '../../packages/questions/src/index.js';
-import { type ClobBook, type GammaEvent } from '../../packages/venue/src/index.js';
+import { parseLadder, type ClobBook, type GammaEvent, type Ladder } from '../../packages/venue/src/index.js';
 import { intake, assembleExposure, type IntakeDeps } from '../../packages/intake/src/intake.js';
 import { newSession, ask, addAssumption, applyAnswer, confirm } from '../../packages/intake/src/session.js';
 import { parseDeadline } from '../../packages/intake/src/parse.js';
@@ -61,22 +61,35 @@ const book = (assetId: string, priceMicros: number): ClobBook => ({
   asks: [{ priceMicros, size: 1_000_000 }],
 });
 
+const RESOLUTION_TEXT =
+  'This market resolves Yes if the final Close price of the Binance 1 minute candle for BTC/USDT ' +
+  'is less than 60,000.';
+
+/** The same ladder the event fixture lists, so the in-code span check sees it. */
+const BRACKET_LABELS = ['<60,000', '60,000-64,000', '64,000-68,000', '68,000-72,000', '>72,000'];
+
+function requireLadder(labels: string[]): Ladder {
+  const ladder = parseLadder(labels);
+  if (ladder === null) throw new Error(`test fixture: [${labels.join(', ')}] must parse as a ladder`);
+  return ladder;
+}
+
+const BRACKET_LADDER = requireLadder(BRACKET_LABELS);
+
 function indexed(observationAt: string): IndexedEvent {
   return {
     eventId: 'e1',
     slug: 'bitcoin-price-on-december-31',
     seriesTicker: 'bitcoin-neg-risk-weekly',
-    underlying: 'BTC',
+    title: GAMMA_EVENT.title,
+    ladder: BRACKET_LADDER,
     observationAt,
+    observationSource: 'endDate',
     endDate: observationAt,
     negRisk: true,
     bracketCount: 5,
   };
 }
-
-const RESOLUTION_TEXT =
-  'This market resolves Yes if the final Close price of the Binance 1 minute candle for BTC/USDT ' +
-  'is less than 60,000.';
 
 /** A choice answer whose argmax is `key`, with the remainder parked elsewhere. */
 function choice(key: string, confidence: number): Answer {
@@ -129,6 +142,7 @@ function harness(answers: Record<string, Answer>, events: IndexedEvent[]): Harne
     engine,
     events,
     resolutionTextFor: () => RESOLUTION_TEXT,
+    bracketLabelsFor: () => BRACKET_LABELS,
     today: TODAY,
     newSessionId: () => {
       sessionIds += 1;

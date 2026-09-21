@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { type GammaEvent, type GammaMarket } from '../../packages/venue/src/index.js';
-import { indexEvent, parseObservationAt, retrieve, SUPPORTED_SERIES, type IndexedEvent } from '../../packages/intake/src/retrieve.js';
+import { type GammaEvent, type GammaMarket, type Ladder } from '../../packages/venue/src/index.js';
+import { indexEvent, parseObservationAt, retrieve, type IndexedEvent } from '../../packages/intake/src/retrieve.js';
 
 const NOON_ET_DESCRIPTION =
   'This market will resolve based on the final Close price of the Binance 1 minute candle ' +
@@ -16,21 +16,42 @@ function market(extra: Partial<GammaMarket> = {}): GammaMarket {
   };
 }
 
+// Three brackets that tile a numeric axis exactly once, so `parseLadder`
+// accepts them and the `negRisk`/bracket-count/ladder conditions all pass by
+// default; individual tests override `markets` to exercise one condition at
+// a time.
 function event(extra: Partial<GammaEvent> = {}): GammaEvent {
   return {
     id: '1', slug: 'bitcoin-price-on-september-26-2026', title: 'Bitcoin price on September 26?',
     negRisk: true, negRiskMarketId: '0xabc', endDate: '2026-09-26T16:00:00Z',
     tags: ['bitcoin', 'crypto'],
-    seriesTickers: [SUPPORTED_SERIES.BTC],
-    markets: [market()],
+    seriesTickers: ['bitcoin-neg-risk-weekly'],
+    markets: [
+      market({ id: 'm1', groupItemTitle: '<60,000' }),
+      market({ id: 'm2', groupItemTitle: '60,000-70,000' }),
+      market({ id: 'm3', groupItemTitle: '>70,000' }),
+    ],
     ...extra,
   };
 }
 
+const SIMPLE_LADDER: Ladder = {
+  brackets: [
+    { lo: null, hi: 60000, label: '<60,000' },
+    { lo: 60000, hi: 70000, label: '60,000-70,000' },
+    { lo: 70000, hi: null, label: '>70,000' },
+  ],
+  unit: '',
+  span: { lo: 60000, hi: 70000 },
+};
+
 function indexed(overrides: Partial<IndexedEvent> = {}): IndexedEvent {
   return {
-    eventId: '1', slug: 'bitcoin-price-on-september-26-2026', seriesTicker: SUPPORTED_SERIES.BTC,
-    underlying: 'BTC', observationAt: '2026-09-26T16:00:00Z', endDate: '2026-09-26T16:00:00Z',
+    eventId: '1', slug: 'bitcoin-price-on-september-26-2026', seriesTicker: 'bitcoin-neg-risk-weekly',
+    title: 'Bitcoin price on September 26?',
+    ladder: SIMPLE_LADDER,
+    observationAt: '2026-09-26T16:00:00Z', observationSource: 'endDate',
+    endDate: '2026-09-26T16:00:00Z',
     negRisk: true, bracketCount: 7,
     ...overrides,
   };
@@ -58,38 +79,77 @@ describe('parseObservationAt', () => {
 });
 
 describe('indexEvent', () => {
-  it('excludes an event whose series is not a supported bracket series, even with a matching-looking title', () => {
-    const upDown = event({
-      title: 'Bitcoin Up or Down - September 26, 4PM ET',
-      seriesTickers: ['btc-updown-4h'],
+  // There is no allow-list any more: an event is indexable because its
+  // bracket labels tile a numeric axis, not because its ticker is on a
+  // list. What now excludes an event is labels that do not parse as a
+  // `Ladder` at all — a candidate-name list, or a set of labels that fails
+  // the contiguity check (here, two open tops).
+  it('excludes an event whose bracket labels do not parse as a ladder', () => {
+    const candidateList = event({
+      title: 'Who will win the 2028 Democratic primary?',
+      markets: [
+        market({ id: 'm1', groupItemTitle: 'Kamala Harris' }),
+        market({ id: 'm2', groupItemTitle: 'Gavin Newsom' }),
+        market({ id: 'm3', groupItemTitle: 'Pete Buttigieg' }),
+      ],
     });
-    expect(indexEvent(upDown, 'BTC')).toBeNull();
+    expect(indexEvent(candidateList)).toBeNull();
 
-    const hitPrice = event({
-      title: 'Bitcoin price on September 26?',
-      seriesTickers: ['bitcoin-hit-price-weekly'],
+    const twoOpenTops = event({
+      markets: [
+        market({ id: 'm1', groupItemTitle: '<60,000' }),
+        market({ id: 'm2', groupItemTitle: '>65,000' }),
+        market({ id: 'm3', groupItemTitle: '>70,000' }),
+      ],
     });
-    expect(indexEvent(hitPrice, 'BTC')).toBeNull();
+    expect(indexEvent(twoOpenTops)).toBeNull();
   });
 
-  it('excludes an event whose description states no readable time, rather than defaulting', () => {
-    const noTime = event({ markets: [market({ description: 'Resolves per the closing price.' })] });
-    expect(indexEvent(noTime, 'BTC')).toBeNull();
+  // The allow-list is gone, but the fallback to `endDate` is a NEW, INTENDED
+  // behaviour (see retrieve.ts's header): most families outside crypto state
+  // no time at all, and that no longer excludes them. What still excludes an
+  // event is a bracket that STATES a time we cannot read with certainty —
+  // guessing there would overrule the venue's own words with a guess.
+  it('defaults to endDate when nothing states a time, but excludes when a stated time cannot be read', () => {
+    const noTimeStated = event({
+      markets: [
+        market({ id: 'm1', groupItemTitle: '<60,000', description: 'Resolves per the closing price.' }),
+        market({ id: 'm2', groupItemTitle: '60,000-70,000', description: 'Resolves per the closing price.' }),
+        market({ id: 'm3', groupItemTitle: '>70,000', description: 'Resolves per the closing price.' }),
+      ],
+    });
+    const noTimeIndexed = indexEvent(noTimeStated);
+    expect(noTimeIndexed?.observationAt).toBe(noTimeStated.endDate);
+    expect(noTimeIndexed?.observationSource).toBe('endDate');
+
+    const unreadableTime = event({
+      markets: [
+        market({ id: 'm1', groupItemTitle: '<60,000', description: 'Resolves at 25:99 in the ET timezone.' }),
+        market({ id: 'm2', groupItemTitle: '60,000-70,000', description: 'Resolves at 25:99 in the ET timezone.' }),
+        market({ id: 'm3', groupItemTitle: '>70,000', description: 'Resolves at 25:99 in the ET timezone.' }),
+      ],
+    });
+    expect(indexEvent(unreadableTime)).toBeNull();
   });
 
   it('excludes an event whose brackets name different observation instants, but tolerates one unreadable bracket', () => {
     const disagreeing = event({
       markets: [
-        market({ id: 'm1' }),
-        market({ id: 'm2', description: 'Resolves to the Binance close at 16:00 in the ET timezone.' }),
+        market({ id: 'm1', groupItemTitle: '<60,000' }),
+        market({ id: 'm2', groupItemTitle: '60,000-70,000', description: 'Resolves to the Binance close at 16:00 in the ET timezone.' }),
+        market({ id: 'm3', groupItemTitle: '>70,000' }),
       ],
     });
-    expect(indexEvent(disagreeing, 'BTC')).toBeNull();
+    expect(indexEvent(disagreeing)).toBeNull();
 
     const oneUnreadable = event({
-      markets: [market({ id: 'm1' }), market({ id: 'm2', description: 'See the event rules.' })],
+      markets: [
+        market({ id: 'm1', groupItemTitle: '<60,000' }),
+        market({ id: 'm2', groupItemTitle: '60,000-70,000' }),
+        market({ id: 'm3', groupItemTitle: '>70,000', description: 'See the event rules.' }),
+      ],
     });
-    expect(indexEvent(oneUnreadable, 'BTC')?.observationAt).toBe('2026-09-26T16:00:00Z');
+    expect(indexEvent(oneUnreadable)?.observationAt).toBe('2026-09-26T16:00:00Z');
   });
 });
 
@@ -99,7 +159,7 @@ describe('retrieve', () => {
       indexed({ eventId: '1', observationAt: '2026-09-21T16:00:00Z' }),
       indexed({ eventId: '2', observationAt: '2026-09-26T16:00:00Z' }),
     ];
-    const result = retrieve(events, 'BTC', '2026-12-31');
+    const result = retrieve(events, '2026-12-31');
     expect(result.kind).toBe('no_market_listed');
     if (result.kind === 'no_market_listed') {
       expect(result.furthestListed).toBe('2026-09-26T16:00:00Z');
@@ -112,7 +172,7 @@ describe('retrieve', () => {
       indexed({ eventId: 'past', observationAt: '2026-09-20T16:00:00Z' }),
       indexed({ eventId: 'future', observationAt: '2026-09-26T16:00:00Z' }),
     ];
-    const result = retrieve(events, 'BTC', '2026-09-23');
+    const result = retrieve(events, '2026-09-23');
     expect(result.kind).toBe('candidates');
     if (result.kind === 'candidates') {
       expect(result.events.map((e) => e.eventId)).toEqual(['future']);
@@ -121,7 +181,7 @@ describe('retrieve', () => {
 
   it('returns an event observing on a later date than the deadline WITH observationNote, not dropped', () => {
     const events = [indexed({ eventId: 'later', observationAt: '2026-09-26T16:00:00Z' })];
-    const result = retrieve(events, 'BTC', '2026-09-23');
+    const result = retrieve(events, '2026-09-23');
     expect(result.kind).toBe('candidates');
     if (result.kind === 'candidates') {
       expect(result.events).toHaveLength(1);

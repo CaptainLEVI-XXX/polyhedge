@@ -58,7 +58,7 @@ import { compile, MissingLevelError } from './compile.js';
 import { extractExposure, type ExtractionResult } from './exposure.js';
 import { assessFit, type FitCandidate } from './fit.js';
 import { parseDeadline, parseUnderlying, type NumberCandidate } from './parse.js';
-import { retrieve, type IndexedEvent } from './retrieve.js';
+import { candidatesForText, retrieve, type IndexedEvent } from './retrieve.js';
 import { selectShape } from './shape.js';
 import {
   addAssumption,
@@ -82,6 +82,12 @@ export interface IntakeDeps extends QuoteDeps {
   events: IndexedEvent[];
   /** Resolution prose per eventId, for `FitCandidate.resolutionText`. */
   resolutionTextFor(eventId: string): string;
+  /**
+   * The event's bracket titles, verbatim. Fit needs the ladder's PRICES: without
+   * them the model is asked to judge coverage knowing only the asset, and
+   * scores every real market as a partial overlap.
+   */
+  bracketLabelsFor(eventId: string): string[];
   today: Date;
   newSessionId(): string;
 }
@@ -572,8 +578,13 @@ export async function intake(
 
   const { exposure, assumptions } = assembled;
 
-  // Dates are compared here, in code, and nowhere else.
-  const retrieval = retrieve(deps.events, underlying, exposure.deadline.value);
+  // Two filters, in order, both in code. `candidatesForText` narrows hundreds of
+  // ladders to the ones plausibly about this subject; `retrieve` then does every
+  // date comparison. Neither asks the model anything.
+  const retrieval = retrieve(
+    candidatesForText(exposure.rawText, deps.events),
+    exposure.deadline.value,
+  );
   if (retrieval.kind === 'no_market_listed') {
     return {
       kind: 'no_market_listed',
@@ -597,6 +608,7 @@ export async function intake(
   const candidates: FitCandidate[] = retrieval.events.map((event) => ({
     event,
     resolutionText: deps.resolutionTextFor(event.eventId),
+    bracketLabels: deps.bracketLabelsFor(event.eventId),
   }));
   const fitResult = await assessFit(
     exposure,
