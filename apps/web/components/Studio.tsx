@@ -1,12 +1,12 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ladder } from './Ladder';
 import { Allocation } from './Allocation';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
-  | { kind: 'quoted'; view: QuotedView }
+  | { kind: 'quoted'; quoteId: string; view: QuotedView }
   | { kind: 'follow_up'; session: unknown; question: string }
   | { kind: 'no_market_listed'; furthestListed: string | null }
   | { kind: 'declined'; reason: string };
@@ -28,6 +28,7 @@ export function Studio() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [result, setResult] = useState<Result | null>(null);
   const [chosen, setChosen] = useState(0);
+  const [frozen, setFrozen] = useState<{ at: string; snapshotId: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
   const session = useRef<unknown>(undefined);
@@ -72,6 +73,7 @@ export function Studio() {
         }
       }
       setChosen(0);
+      setFrozen(null);
       setResult(r);
     } catch (error) {
       setResult(null);
@@ -156,7 +158,14 @@ export function Studio() {
       )}
 
       {!busy && result?.kind === 'quoted' && (
-        <Quoted view={result.view} chosen={chosen} onChoose={setChosen} />
+        <Quoted
+          view={result.view}
+          quoteId={result.quoteId}
+          chosen={chosen}
+          onChoose={setChosen}
+          frozen={frozen}
+          onFreeze={setFrozen}
+        />
       )}
 
       {!busy && result?.kind === 'no_market_listed' && (
@@ -184,12 +193,18 @@ export function Studio() {
 
 function Quoted({
   view,
+  quoteId,
   chosen,
   onChoose,
+  frozen,
+  onFreeze,
 }: {
   view: QuotedView;
+  quoteId: string;
   chosen: number;
   onChoose: (i: number) => void;
+  frozen: { at: string; snapshotId: string } | null;
+  onFreeze: (f: { at: string; snapshotId: string } | null) => void;
 }) {
   const option = view.options[chosen] ?? view.options[0];
   if (option === undefined) return null;
@@ -202,7 +217,14 @@ function Quoted({
         </div>
       </div>
 
-      {view.options.length > 1 && (
+      <Review
+        quoteId={quoteId}
+        option={option}
+        frozen={frozen}
+        onFreeze={onFreeze}
+      />
+
+      {view.options.length > 1 && !frozen && (
         <div className="box">
           <header>How much cover</header>
           <div className="stops">
@@ -336,6 +358,98 @@ function Quoted({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * The boundary between exploring and consenting.
+ *
+ * A price that moves while you read it means "what did I agree to" has no
+ * answer, so pinning stops everything and fixes the record with its snapshot.
+ * The clock is shown because a frozen quote is only honest for as long as the
+ * book behind it holds, and re-pricing is an explicit act that produces a NEW
+ * record rather than quietly editing this one.
+ */
+function Review({
+  quoteId,
+  option,
+  frozen,
+  onFreeze,
+}: {
+  quoteId: string;
+  option: CoverOptionView;
+  frozen: { at: string; snapshotId: string } | null;
+  onFreeze: (f: { at: string; snapshotId: string } | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [age, setAge] = useState(0);
+
+  useEffect(() => {
+    if (frozen === null) return;
+    const started = Date.parse(frozen.at);
+    const tick = setInterval(() => setAge(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(tick);
+  }, [frozen]);
+
+  const freeze = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/quote/${quoteId}/accept`, { method: 'POST' });
+      const body = (await res.json()) as { acceptedAt?: string; snapshotId?: string };
+      if (body.acceptedAt !== undefined && body.snapshotId !== undefined) {
+        onFreeze({ at: body.acceptedAt, snapshotId: body.snapshotId });
+        setAge(0);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (frozen === null) {
+    return (
+      <div className="box">
+        <div className="body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span style={{ color: 'var(--ink-2)' }}>
+            This price moves with the book. Pin it to stop it and see exactly what you would be
+            agreeing to.
+          </span>
+          <span className="spacer" />
+          <button className="primary" onClick={() => void freeze()} disabled={busy}>
+            {busy ? 'Pinning' : 'Review this'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const stale = age > 60;
+  return (
+    <div className="box" style={{ borderColor: stale ? 'var(--short)' : 'var(--ink)' }}>
+      <div className="body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div>
+          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--muted)' }}>
+            PINNED — THIS PRICE NO LONGER MOVES
+          </div>
+          <div style={{ fontFamily: 'var(--serif)', fontSize: 24, marginTop: 4 }}>
+            {option.costLabel} for {option.paysLabel} of cover
+          </div>
+        </div>
+        <span className="spacer" />
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--muted)' }}>PINNED FOR</div>
+          <div style={{ fontSize: 22, color: stale ? 'var(--short-ink)' : 'var(--ink)' }}>
+            {Math.floor(age / 60)}:{String(age % 60).padStart(2, '0')}
+          </div>
+        </div>
+        <button onClick={() => onFreeze(null)}>Unpin</button>
+      </div>
+      {stale && (
+        <div className="note stop">
+          This was priced over a minute ago and the book has almost certainly moved. Re-price
+          before acting on it — that produces a new quote rather than changing this one.
+        </div>
+      )}
+    </div>
   );
 }
 
