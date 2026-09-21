@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Ladder } from './Ladder';
 import { Allocation } from './Allocation';
-import { checkFunding } from '@/lib/funding';
+import { readiness, type WalletFacts } from '@/lib/wallet-readiness';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
@@ -406,10 +406,17 @@ function Review({
     }
   };
 
-  // No wallet yet, so this reports honestly that affordability is unknown
-  // rather than implying the money is there. When a wallet arrives the same
-  // check runs against its pUSD balance, net of resting-order reservations.
-  const funding = checkFunding(null, 0, 0);
+  // No wallet connected yet, so every fact below is honestly unknown rather
+  // than assumed true. When Privy lands, these come from the real wallet and
+  // nothing else about this component changes.
+  const facts: WalletFacts = {
+    address: null,
+    provisioned: false,
+    approvalsReady: false,
+    availableMicros: null,
+    pendingDepositMicros: 0,
+  };
+  const ready = readiness(facts, 0);
 
   if (frozen === null) {
     return (
@@ -424,7 +431,7 @@ function Review({
             {busy ? 'Pinning' : 'Review this'}
           </button>
         </div>
-        <div className="note info">{funding.message}</div>
+        <div className="note info">{ready.message}</div>
       </div>
     );
   }
@@ -449,14 +456,20 @@ function Review({
           </div>
         </div>
         <button onClick={() => onFreeze(null)}>Unpin</button>
-        <button className="primary" disabled title="Placing orders is not built yet">
+        <button className="primary" disabled={!ready.canPlace} title={ready.message}>
           Place {option.ladder.heldCount} orders
         </button>
       </div>
       <div className="note warn">
-        {funding.message} Orders are settled in pUSD, which is not the same token as the USDC you
-        may already hold — it has to be deposited and wrapped first. Nothing can be placed until
-        that is done, and this says so here rather than at the moment you press the button.
+        {ready.message} Orders settle in pUSD, which is not the USDC you may already hold — it has
+        to be deposited and wrapped first.
+      </div>
+      <div className="note info">
+        These {option.ladder.heldCount} orders go one at a time, thinnest book first, and you will
+        be asked to sign <strong>{option.ladder.heldCount} times</strong>. There is no way to place
+        them as one transaction. If a later one fails you will hold part of a hedge, and selling
+        that back is more signatures — so if you leave before doing it, you keep the part you
+        already bought until you come back.
       </div>
       {stale && (
         <div className="note stop">
