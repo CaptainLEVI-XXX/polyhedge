@@ -7,9 +7,12 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b && tsc -p tests/tsconfig.json",
+    "typecheck": "tsc -b && tsc -p tests/tsconfig.json && tsc -p apps/web/tsconfig.json",
     "demo": "node --import tsx examples/simulated-lifecycle.ts",
-    "db:migrate": "node --import tsx examples/migrate.ts"
+    "db:migrate": "node --import tsx examples/migrate.ts",
+    "studio": "node --import tsx studio/src/server.ts",
+    "web": "pnpm --filter @polyhedge/web dev",
+    "verify:solver": "node apps/web/scripts/verify-solver.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

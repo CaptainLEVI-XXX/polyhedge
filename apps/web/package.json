@@ -1,0 +1,25 @@
+{
+  "name": "@polyhedge/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000"
+  },
+  "dependencies": {
+    "@polyhedge/core": "workspace:*",
+    "@polyhedge/engine": "workspace:*",
+    "@polyhedge/intake": "workspace:*",
+    "@polyhedge/questions": "workspace:*",
+    "@polyhedge/venue": "workspace:*",
+    "next": "^15.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  }
+}
