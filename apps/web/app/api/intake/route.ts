@@ -1,9 +1,12 @@
 import { createJevEngine } from '@polyhedge/questions';
+import { quoteSession } from '@polyhedge/engine';
+import { LpNotOptimalError } from '@polyhedge/core';
 import { fetchBooks, fetchEvent } from '@polyhedge/venue';
 import { buildBasketOptions, intake, type IntakeDeps, type IntakeSession } from '@polyhedge/intake';
 import { marketIndex } from '@/lib/markets';
 import { handleRouteError } from '@/lib/errors';
-import { toOptionView, toQuotedView } from '@/lib/view-model';
+import { composeView } from '@/lib/compose';
+import { linkForMarket } from '@/lib/venue-links';
 import { putQuote, putSnapshot } from '@/lib/store';
 import { rateLimit, readJsonBody, requireCaller, TooManyRequests } from '@/lib/identity';
 
@@ -20,6 +23,8 @@ const LIMIT_PER_MINUTE = 12;
 interface Body {
   text?: unknown;
   session?: unknown;
+  maxNetLossUsd?: unknown;
+  maxLegs?: unknown;
 }
 
 function requireKey(): string {
@@ -32,12 +37,29 @@ function requireKey(): string {
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
+  const timings: Record<string, number> = {};
+  const timed = async <T,>(name: string, run: () => Promise<T>): Promise<T> => {
+    const start = performance.now();
+    try { return await run(); }
+    finally { timings[name] = (timings[name] ?? 0) + performance.now() - start; }
+  };
+  const respond = (payload: object) => Response.json({ ...payload, timings }, {
+    headers: { 'Server-Timing': Object.entries(timings).map(([k, v]) => `${k};dur=${v.toFixed(1)}`).join(', ') },
+  });
   try {
     const caller = requireCaller(request);
     rateLimit(caller, 'intake', LIMIT_PER_MINUTE, 60_000);
 
     const body = (await readJsonBody(request, MAX_BODY_BYTES)) as Body;
     const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (body.maxLegs !== undefined && (typeof body.maxLegs !== 'number'
+      || !Number.isInteger(body.maxLegs) || body.maxLegs < 1 || body.maxLegs > 30)) {
+      throw new Error('bad_request: maximum positions must be between 1 and 30');
+    }
+    if (body.maxNetLossUsd !== undefined && (typeof body.maxNetLossUsd !== 'number'
+      || !Number.isFinite(body.maxNetLossUsd) || body.maxNetLossUsd < 0 || body.maxNetLossUsd > 1e12)) {
+      throw new Error('bad_request: invalid remaining loss limit');
+    }
 
     if (text === '') {
       return Response.json(
@@ -58,29 +80,39 @@ export async function POST(request: Request) {
     // is never reconstructing state from prose.
     const session = body.session as IntakeSession | undefined;
 
-    const index = await marketIndex();
+    const index = await timed('discovery', () => marketIndex());
+    const engine = createJevEngine({ apiKey: requireKey() });
+    let modelCall = 0;
+    const venue = quoteSession({
+      fetchEvent: async (id) => index.byId.get(id) ?? (await fetchEvent(id)),
+      fetchBooks: (ids) => timed('books', () => fetchBooks(ids)),
+      saveSnapshot: (books) => timed('snapshot', () => putSnapshot(books)),
+    });
     const deps: IntakeDeps = {
-      engine: createJevEngine({ apiKey: requireKey() }),
+      ...venue,
+      onTiming: (name, milliseconds) => { timings[name] = milliseconds; },
+      combinedShape: process.env.POLYHEDGE_COMBINED_INTAKE !== '0',
+      execution: { quantityStep: 0.01, ...(body.maxLegs === undefined ? {} : { maxLegs: body.maxLegs as number }) },
+      protectionGoal: body.maxNetLossUsd === undefined ? { kind: 'minimize_net_loss' }
+        : { kind: 'limit_net_loss', maxNetLossUsd: body.maxNetLossUsd as number },
+      engine: { ask: (state, questions) => timed(`model${++modelCall}`, () => engine.ask(state, questions)) },
       events: index.events,
       resolutionTextFor: (id) => index.resolutionText.get(id) ?? '',
       bracketLabelsFor: (id) => index.bracketLabels.get(id) ?? [],
       today: new Date(),
       newSessionId: () => `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      fetchEvent: async (id) => index.byId.get(id) ?? (await fetchEvent(id)),
-      fetchBooks,
       // Durable, because `bindQuote` re-hashes these books against the accepted
       // record before execution: a quote that cannot produce its books later
       // cannot be bound, and one nobody can bind cannot be executed.
-      saveSnapshot: putSnapshot,
     };
 
-    const result = await intake(text, deps, session);
+    const result = await timed('intake', () => intake(text, deps, session));
 
     // Everything but a quote is already in the plain register and crosses as
     // it is. A quote does not: the raw record carries token ids, hashes and
     // engine vocabulary, and its numbers are unrounded.
     if (result.kind !== 'quoted') {
-      return Response.json({ result, indexedCount: index.events.length, tookMs: Date.now() - startedAt });
+      return respond({ result, indexedCount: index.events.length, tookMs: Date.now() - startedAt });
     }
 
     const event = index.events.find((e) => e.eventId === result.record.request.eventId);
@@ -88,57 +120,47 @@ export async function POST(request: Request) {
       throw new Error('quoted an event that is no longer indexed');
     }
 
-    const unit = event.ladder.unit;
     // The venue's own wording for each outcome, so a position is shown as the
     // question it actually is rather than as a bracket label we invented.
     const gamma = index.byId.get(event.eventId);
     const questionFor = (marketId: string): string =>
       gamma?.markets.find((m) => m.id === marketId)?.question ?? '';
 
-    // The stops. Solved together against one pinned snapshot so the three
-    // prices are the same moment and can honestly be read side by side.
-    const stops = await buildBasketOptions(result.record.request, deps);
+    // The stops. Solved together against one pinned snapshot so the prices are
+    // the same moment and can honestly be read side by side.
+    const stops = await timed('options', () => buildBasketOptions(result.record.request, venue, {
+      ruleFlags: result.record.meta.ruleFlags,
+      correlationResidual: result.record.meta.correlationResidual,
+      jevModelVersion: result.record.meta.jevModelVersion,
+      calibrationMapVersion: result.record.meta.calibrationMapVersion,
+    }, result.record));
 
-    const view = toQuotedView(
-      result.record,
+    // Composed through the one shared path, which also re-measures every
+    // alternative against the primary's target before it crosses the wire.
+    const { view, optionRecords } = composeView({
+      primary: result.record,
       event,
-      [
-        ...stops.map((stop, i) =>
-          // Same shape at different budgets, so each record's own coverage is
-          // already measured against the real loss.
-          toOptionView(`stop-${i}`, stop.name, stop.reason, stop.record, unit, questionFor),
-        ),
-        ...result.alternatives.map((alt) =>
-          toOptionView(alt.kind, alt.kind.replace(/_/g, ' '), alt.reason, alt.record, unit, questionFor),
-        ),
-      ],
-      result.assumptions,
-    );
-
-    // An alternative CHANGES the shape, so it solves a different target and its
-    // own residual flatters it — a further strike reports perfect coverage for
-    // strictly less protection. Overwrite with the re-measurement against the
-    // original target before anything crosses the wire, because the safest
-    // place to close that trap is the boundary, not every renderer downstream.
-    result.alternatives.forEach((alt, i) => {
-      const option = view.options[stops.length + i];
-      if (option === undefined) return;
-      const ratio = Math.max(0, Math.min(1, alt.residualVsPrimary.coverageRatio));
-      option.coverageRatio = ratio;
-      option.coverageLabel = `${Math.floor(ratio * 100)}%`;
+      stops,
+      alternatives: result.alternatives,
+      assumptions: result.assumptions,
+      questionFor,
+      linkFor: (marketId) => linkForMarket(gamma, marketId),
     });
 
     // Stored before it is shown. What the user is about to read has to be
     // retrievable later, exactly as it was, or "what did I agree to" has no
     // answer once prices move.
-    const stored = await putQuote(caller.id, result.record, view);
+    const stored = await timed('store', () => putQuote(caller.id, result.record, view, null, 0, optionRecords));
 
-    return Response.json({
+    return respond({
       result: { kind: 'quoted', quoteId: stored.id, view },
       indexedCount: index.events.length,
       tookMs: Date.now() - startedAt,
     });
   } catch (error) {
+    if (error instanceof LpNotOptimalError && error.phase === 'loss limit' && error.status === 'Infeasible') {
+      return respond({ result: { kind: 'declined', reason: 'The available books and your budget cannot meet that remaining-loss limit. Increase the limit or budget and rebuild.' }, tookMs: Date.now() - startedAt });
+    }
     if (error instanceof TooManyRequests) {
       return Response.json(
         { error: 'Too many requests. Give it a moment.', code: 'rate_limited' },

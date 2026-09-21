@@ -8,7 +8,7 @@ export interface Parsed<T> {
 }
 
 export type LevelRole = 'threshold' | 'range_low' | 'range_high';
-export interface NamedLevel { value: number; role: LevelRole }
+export interface NamedLevel { value: number; role: LevelRole; unit?: string }
 
 export interface TypedExposure {
   rawText: string;

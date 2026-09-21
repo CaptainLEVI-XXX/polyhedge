@@ -39,6 +39,8 @@ export interface StoredQuote {
   /** Set once, at review. From then on this row never changes again. */
   acceptedAt: string | null;
   createdAt: string;
+  optionRecords?: Record<string, QuoteRecord>;
+  acceptedOptionId?: string;
 }
 
 export class QuoteImmutable extends Error {
@@ -75,6 +77,7 @@ export async function putQuote(
   view: QuotedView,
   previousId: string | null = null,
   revision = 0,
+  optionRecords?: Record<string, QuoteRecord>,
 ): Promise<StoredQuote> {
   const stored: StoredQuote = {
     id: randomUUID(),
@@ -85,6 +88,7 @@ export async function putQuote(
     view,
     acceptedAt: null,
     createdAt: new Date().toISOString(),
+    ...(optionRecords ? { optionRecords } : {}),
   };
   await writeFile(await quotePath(stored.id), JSON.stringify(stored), 'utf8');
   return stored;
@@ -111,12 +115,32 @@ export async function getQuote(id: string, owner: string): Promise<StoredQuote> 
  * `putQuote` with `previousId` set, so what the user agreed to remains readable
  * exactly as it was.
  */
-export async function acceptQuote(id: string, owner: string): Promise<StoredQuote> {
+async function acceptSelected(id: string, owner: string, optionId?: string): Promise<StoredQuote> {
   const stored = await getQuote(id, owner);
-  if (stored.acceptedAt !== null) return stored;
-  const accepted: StoredQuote = { ...stored, acceptedAt: new Date().toISOString() };
+  if (stored.acceptedAt !== null) {
+    if (optionId !== undefined && optionId !== stored.acceptedOptionId) throw new QuoteImmutable(id);
+    return stored;
+  }
+  if (stored.optionRecords && optionId === undefined) throw new Error('bad_request: select a basket');
+  const selected = optionId === undefined ? stored.record
+    : Object.hasOwn(stored.optionRecords ?? {}, optionId) ? stored.optionRecords![optionId] : undefined;
+  if (!selected) throw new Error('bad_request: basket unavailable; rebuild this quote');
+  const accepted: StoredQuote = { ...stored, record: selected, acceptedAt: new Date().toISOString(),
+    ...(optionId === undefined ? {} : { acceptedOptionId: optionId }) };
   await writeFile(await quotePath(id), JSON.stringify(accepted), 'utf8');
   return accepted;
+}
+
+// Serialize accept operations in this single-instance filesystem store so two
+// simultaneous selections cannot both replace the accepted record.
+const accepting = new Map<string, Promise<StoredQuote>>();
+export async function acceptQuote(id: string, owner: string, optionId?: string): Promise<StoredQuote> {
+  const previous = accepting.get(id);
+  const pending = (previous ? previous.catch(() => undefined) : Promise.resolve())
+    .then(() => acceptSelected(id, owner, optionId));
+  accepting.set(id, pending);
+  try { return await pending; }
+  finally { if (accepting.get(id) === pending) accepting.delete(id); }
 }
 
 /** Guards any write that is not the one-time accept. */

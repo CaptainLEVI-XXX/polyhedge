@@ -27,7 +27,7 @@ export async function runSimulation(winner = true) {
     id: 'demo', slug: 'demo', title: 'Simulated BTC ladder', negRisk: true, negRiskMarketId: `0x${'2'.repeat(64)}`,
     endDate: '2026-10-01T16:00:00Z', tags: [], seriesTickers: [],
     markets: ['low', 'high'].map((id, i) => ({ id, question: id, groupItemTitle: i ? '>=68000' : '<68000',
-      description: 'Simulation only', yesTokenId: `${id}YES`, noTokenId: `${id}NO`, yesPrice: i ? 0.8 : 0.2,
+      description: 'Simulation only', slug: null, yesTokenId: `${id}YES`, noTokenId: `${id}NO`, yesPrice: i ? 0.8 : 0.2,
       tickSize: 0.01, feeRate: 0, endDate: '2026-10-01T16:00:00Z' })),
   };
   let pinned: ClobBook[] = [];

@@ -40,6 +40,7 @@
 
 import {
   quote,
+  quoteSession,
   type QuoteDeps,
   type QuoteOptions,
   type QuoteRecord,
@@ -55,11 +56,11 @@ import {
 } from '@polyhedge/questions';
 import { buildAlternatives, type Alternative } from './alternatives.js';
 import { compile, MissingLevelError } from './compile.js';
-import { extractExposure, type ExtractionResult } from './exposure.js';
+import { extractExposure, needsPathCheck, type ExtractionResult } from './exposure.js';
 import { assessFit, type FitCandidate } from './fit.js';
-import { parseDeadline, parseUnderlying, type NumberCandidate } from './parse.js';
+import { findNumbers, parseDeadline, parseUnderlying, type NumberCandidate } from './parse.js';
 import { candidatesForText, retrieve, subjectWords, type IndexedEvent } from './retrieve.js';
-import { selectShape } from './shape.js';
+import { selectShape, selectExtractedShape, readShapeAnswer } from './shape.js';
 import {
   addAssumption,
   applyAnswer,
@@ -77,6 +78,11 @@ export type IntakeResult =
   | { kind: 'declined'; reason: string };
 
 export interface IntakeDeps extends QuoteDeps {
+  /** Batch shape interpretation with extraction; uncertain results use the detailed fallback. */
+  combinedShape?: boolean;
+  protectionGoal?: QuoteRequest['protectionGoal'];
+  execution?: QuoteRequest['execution'];
+  onTiming?: (name: string, milliseconds: number) => void;
   engine: QuestionEngine;
   /** Already-indexed candidate markets. Fetching and indexing is the caller's job. */
   events: IndexedEvent[];
@@ -205,7 +211,7 @@ function followUpQuestion(field: string, deadline: Parsed<string> | null): strin
     case 'lossUsd':
       return 'How much money would you lose if that happened? The dollar amount is what the size of the hedge is built from, so I would rather ask than guess it from what you hold.';
     case 'threshold':
-      return 'At what price does the loss start? One number is enough.';
+      return 'At what measured level does the loss start? Include the unit—for example, a price in dollars or a temperature in °F or °C. For weather, also say whether you mean the daily high, low, or temperature during your event.';
     case 'range_low':
       return 'What is the lower price of the range you are comfortable inside?';
     case 'range_high':
@@ -266,8 +272,22 @@ export function assembleExposure(
   underlying: string,
   followUpsAsked: number,
   calibration: CalibrationMap = IDENTITY_CALIBRATION,
+  clarifications: { field: string; answer: string }[] = [],
 ): ExposureAssembly {
   const assumptions: string[] = [];
+  if (needsPathCheck(text)) {
+    const raw = extraction.answers['settlementBasis'];
+    const answer = raw && calibrate(raw, calibration);
+    const basis = answer?.kind === 'choice' ? argmaxKey(answer.probabilities) ?? answer.choice : null;
+    if (answer?.kind === 'choice' && answer.confidence >= ROLE_CONFIDENCE_THRESHOLD && basis === 'path') {
+      return { kind: 'declined', reason: 'This payment depends on an intermediate touch or crossing. A basket settling only on the final outcome cannot reproduce it, even if the price later recovers.' };
+    }
+    if (answer?.kind !== 'choice' || answer.confidence < ROLE_CONFIDENCE_THRESHOLD || basis !== 'final') {
+      return { kind: 'follow_up', field: 'settlementBasis',
+        question: 'Should protection pay only from the final observed outcome, or as soon as a level is touched even if it later recovers?',
+        known: { rawText: text, underlying }, assumptions };
+    }
+  }
 
   // No date in the text at all means `deadlineStated` was never asked, so
   // there is no answer for `route` to read. Routing it anyway would decline
@@ -304,6 +324,19 @@ export function assembleExposure(
   }
 
   const placements = new Map<PlacedRole, NumberCandidate>();
+  const corrected = new Set<PlacedRole>();
+  const latest = new Map(clarifications.map(a => [a.field, a.answer.trim()]));
+  for (const [field, answer] of latest) {
+    const role = field === 'lossUsd' ? 'loss' : field === 'budgetUsd' ? 'budget'
+      : field === 'holdingUsd' ? 'holding' : field;
+    if (!isPlacedRole(role)) continue;
+    const numbers = findNumbers(answer);
+    // Only a single, explicit numeric answer to our field-specific question
+    // replaces earlier values. Free prose still goes through interpretation.
+    if (numbers.length !== 1 || numbers[0]!.raw !== answer.replace(/\s*(°\s*[CF]|degrees?\s+(?:Fahrenheit|Celsius)|Fahrenheit|Celsius|%|bps)$/i, '').trim() || !Number.isFinite(numbers[0]!.value)) continue;
+    placements.set(role, { ...numbers[0]!, context: `Explicit answer for ${field}: ${answer}` });
+    corrected.add(role);
+  }
   let conflictingRole: PlacedRole | undefined;
 
   extraction.candidates.forEach((candidate, i) => {
@@ -336,6 +369,7 @@ export function assembleExposure(
       assumptions.push(leftOut(candidate, `it came back under an unrecognised role "${role}"`));
       return;
     }
+    if (corrected.has(role)) return;
 
     // Two numbers under one role is contradictory input. `compile` already
     // throws on two levels sharing a role, and silently overwriting
@@ -343,7 +377,10 @@ export function assembleExposure(
     // stands and the second is named.
     const existing = placements.get(role);
     if (existing !== undefined) {
-      if (existing.value !== candidate.value) conflictingRole = role;
+      if (existing.value !== candidate.value || (existing.unit && candidate.unit && existing.unit !== candidate.unit)) conflictingRole = role;
+      if (existing.value === candidate.value && existing.unit === undefined && candidate.unit !== undefined) {
+        placements.set(role, candidate);
+      }
       assumptions.push(
         `Used "${existing.raw}" as ${ROLE_WORDS[role]} and left "${candidate.raw}" ` +
           `("${candidate.context}") out: two numbers came back under the same role.`,
@@ -355,13 +392,17 @@ export function assembleExposure(
   });
 
   if (conflictingRole !== undefined) {
-    return { kind: 'declined', reason: `I found conflicting values for ${ROLE_WORDS[conflictingRole]}. Please restate the exposure with one value for that field.` };
+    const field = conflictingRole === 'loss' ? 'lossUsd' : conflictingRole === 'budget' ? 'budgetUsd'
+      : conflictingRole === 'holding' ? 'holdingUsd' : conflictingRole;
+    return { kind: 'follow_up', field,
+      question: `I found different values for ${ROLE_WORDS[conflictingRole]}. Which single value should I use?`,
+      known: { rawText: text, underlying, deadline }, assumptions: [] };
   }
 
   const levels: NamedLevel[] = [];
   for (const role of LEVEL_ROLES) {
     const candidate = placements.get(role);
-    if (candidate !== undefined) levels.push({ value: candidate.value, role });
+    if (candidate !== undefined) levels.push({ value: candidate.value, role, ...(candidate.unit ? { unit: candidate.unit } : {}) });
   }
 
   const directionAnswerRaw = extraction.answers['lossDirection'];
@@ -468,8 +509,37 @@ function followUpResult(
   for (const note of assumptions) session = addAssumption(session, note);
   session = confirmAll(session, known);
   session = ask(session, field, question);
-  return { kind: 'follow_up', session, question };
+  return { kind: 'follow_up', session, question: reAsk(base, field, question) };
 }
+
+/**
+ * Asking the same thing twice, without pretending nothing was said.
+ *
+ * Repeating a question verbatim after the user has answered it is the single
+ * most broken-looking thing an intake can do — it reads as the product having
+ * ignored them, when in fact their answer simply did not parse. It also gives
+ * them nothing to go on, so the natural response is to retype the same words
+ * and get the same result.
+ *
+ * So a second ask names what was not readable and shows a form that works.
+ */
+function reAsk(base: IntakeSession, field: string, question: string): string {
+  const previous = base.answers.filter((a) => a.field === field).at(-1);
+  if (previous === undefined) return question;
+  return `I could not read ${DESCRIPTIONS[field] ?? 'that'} in “${previous.answer}”. ${question}`;
+}
+
+const DESCRIPTIONS: Record<string, string> = {
+  deadline: 'a date',
+  deadlineStated: 'a date',
+  underlying: 'anything this venue lists',
+  lossUsd: 'an amount',
+  budgetUsd: 'an amount',
+  threshold: 'a price',
+  range_low: 'a price',
+  range_high: 'a price',
+  lossDirection: 'which way the position loses',
+};
 
 /**
  * The model version recorded on the quote.
@@ -538,8 +608,13 @@ export async function intake(
 
   const deadline = parseDeadline(sourceText, deps.today);
 
+  if (deadline === null && !needsPathCheck(sourceText)) {
+    return followUpResult(continued ?? newSession(text, deps.newSessionId()), [],
+      { rawText: sourceText, underlying }, 'deadline', followUpQuestion('deadline', null));
+  }
+
   // Jev call 1.
-  const extraction = await extractExposure(sourceText, deps.today, deps.engine);
+  const extraction = await extractExposure(sourceText, deps.today, deps.engine, deps.combinedShape);
 
   // A continued session keeps its id and its original words; only a fresh
   // one draws an id, so `newSessionId` is a reliable count of conversations
@@ -556,6 +631,7 @@ export async function intake(
     underlying,
     base.followUpsAsked,
     calibration,
+    continued?.answers,
   );
 
   if (assembled.kind === 'declined') {
@@ -590,10 +666,36 @@ export async function intake(
     };
   }
 
+  if (exposure.levels.length === 0) {
+    if (deps.combinedShape && extraction.answers.priceTemplate?.kind === 'choice') {
+      const shape = readShapeAnswer(exposure, extraction.answers, extraction.modelVersion, calibration);
+      if (shape.kind === 'decline' && !shape.clarify) return { kind: 'declined', reason: shape.reason };
+    }
+    return followUpResult(base, assumptions, exposure, 'threshold', followUpQuestion('threshold', deadline));
+  }
+
+  if (/\b(temperature|fahrenheit|celsius|degrees?|cold|hot)\b|°[CF]/i.test(sourceText)
+    && exposure.levels.some(level => level.unit !== '°F' && level.unit !== '°C')) {
+    return followUpResult(base, assumptions, exposure, 'threshold',
+      'What temperature triggers the loss, in °F or °C? Also specify the daily high, daily low, or temperature during your event.');
+  }
+
   // Jev call 2.
-  const selection = await selectShape(exposure, deps.engine, calibration);
+  const selection = deps.combinedShape
+    ? await selectExtractedShape(exposure, extraction, deps.engine, calibration)
+    : await selectShape(exposure, deps.engine, calibration);
   if (selection.kind === 'decline') {
+    if (selection.clarify) return followUpResult(base, assumptions, exposure, 'payoutShape', selection.reason);
     return { kind: 'declined', reason: selection.reason };
+  }
+
+  // Validate required levels before paying for market-fit interpretation.
+  try { compile(exposure, selection.templateId, { eventId: 'validation' }); }
+  catch (error) {
+    if (error instanceof MissingLevelError) {
+      return followUpResult(base, assumptions, exposure, error.field, followUpQuestion(error.field, deadline));
+    }
+    throw error;
   }
 
   // Jev call 3 — the whole shortlist in one payload.
@@ -616,9 +718,7 @@ export async function intake(
   if (chosenIndex === -1) {
     return {
       kind: 'declined',
-      reason:
-        `None of the ${fitResult.fits.length} listed ${underlying} market(s) around ` +
-        `${exposure.deadline.value} pays out closely enough to the loss you described to be worth quoting.`,
+      reason: 'I could not find a suitable numeric market in the current index for this loss. The candidates did not match the measured outcome, units, or required levels.',
     };
   }
   const chosenFit = fitResult.fits[chosenIndex]!;
@@ -646,6 +746,8 @@ export async function intake(
   }
   try {
     request = compile(exposure, selection.templateId, chosenEvent);
+    if (deps.protectionGoal) request = { ...request, protectionGoal: deps.protectionGoal };
+    if (deps.execution) request = { ...request, execution: deps.execution };
   } catch (err) {
     // A template that needs a price the user never said is one question,
     // not a crash and not a default.
@@ -661,8 +763,13 @@ export async function intake(
     throw err;
   }
 
-  const record = await quote(request, deps, options);
-  const alternatives = await buildAlternatives(record, deps, options);
+  const pinned = quoteSession(deps);
+  const quoteStarted = performance.now();
+  const record = await quote(request, pinned, options);
+  deps.onTiming?.('primaryQuote', performance.now() - quoteStarted);
+  // Loss-based options keep the original target. Weakening it would change
+  // the objective and cannot be ranked as an improvement in remaining loss.
+  const alternatives = request.protectionGoal ? [] : await buildAlternatives(record, pinned, options);
 
   return { kind: 'quoted', record, alternatives, assumptions };
 }

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const mkt = (id: string, title: string, fee: number | null = 0.07) => ({
   id, question: `q ${id}`, groupItemTitle: title, description: 'd',
-  yesTokenId: `${id}_yes`, noTokenId: `${id}_no`, yesPrice: 0.2,
+  slug: null, yesTokenId: `${id}_yes`, noTokenId: `${id}_no`, yesPrice: 0.2,
   tickSize: 0.01, feeRate: fee, endDate: '2026-12-31T16:00:00Z',
 });
 
@@ -132,6 +132,25 @@ describe('quote', () => {
 });
 
 describe('replay', () => {
+  it('replays executable quantities from stored minimum sizes and refuses missing metadata', async () => {
+    const request = { eventId: 'e1', shape: { templateId: 'threshold_digital' as const,
+      payoutUsd: 1000, direction: 'below' as const, k: 68000 }, budgetUsd: 10,
+      protectionGoal: { kind: 'minimize_net_loss' as const }, execution: { quantityStep: 0.01, maxLegs: 2 } };
+    const books = Object.keys(prices).map(id => ({ ...book(id, prices[id]!), minOrderSize: 5 }));
+    const rec = await quote(request, { ...deps(), fetchBooks: async () => books });
+    expect(await replay(JSON.parse(JSON.stringify(rec)), books)).toEqual(rec.basket);
+    await expect(quote(request, deps())).rejects.toThrow(/minimum order size/);
+  });
+  it('preserves the premium-aware objective and explicit loss limit across JSON replay', async () => {
+    for (const protectionGoal of [{ kind: 'minimize_net_loss' } as const,
+      { kind: 'limit_net_loss', maxNetLossUsd: 600 } as const]) {
+      const rec = await quote({ eventId: 'e1',
+        shape: { templateId: 'threshold_digital', payoutUsd: 1000, direction: 'below', k: 68000 },
+        protectionGoal }, deps());
+      const books = Object.keys(prices).map(id => book(id, prices[id]!));
+      expect(await replay(JSON.parse(JSON.stringify(rec)), books)).toEqual(rec.basket);
+    }
+  });
   it('reproduces the basket exactly from the record and its books', async () => {
     const rec = await quote(
       { eventId: 'e1', shape: { templateId: 'range_protect', payoutUsd: 2500, low: 68000, high: 70000 } },
@@ -234,7 +253,7 @@ const fixtures = JSON.parse(readFileSync(fixturesPath, 'utf8')) as Array<{
 
 const goldenMkt = (id: string, title: string, fee: number) => ({
   id, question: `q ${id}`, groupItemTitle: title, description: 'd',
-  yesTokenId: `${id}_yes`, noTokenId: `${id}_no`, yesPrice: 0.2,
+  slug: null, yesTokenId: `${id}_yes`, noTokenId: `${id}_no`, yesPrice: 0.2,
   tickSize: 0.01, feeRate: fee, endDate: '2026-12-31T16:00:00Z',
 });
 

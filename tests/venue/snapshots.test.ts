@@ -12,6 +12,8 @@ describe('snapshots', () => {
   it('round-trips', async () => {
     const d = dir();
     expect(await loadSnapshot(d, await saveSnapshot(d, books))).toEqual(books);
+    const sized = books.map(b => ({ ...b, minOrderSize: 5 }));
+    expect(await loadSnapshot(d, await saveSnapshot(d, sized))).toEqual(sized);
   });
   it('gives identical content the same id', async () => {
     const d = dir();

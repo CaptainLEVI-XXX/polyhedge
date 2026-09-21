@@ -1,30 +1,39 @@
-import { fetchEvent, parseEvent, type GammaEvent } from '@polyhedge/venue';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { parseEvent, openEventPages, type GammaEvent } from '@polyhedge/venue';
 import { indexEvent, type IndexedEvent } from '@polyhedge/intake';
 
-/**
- * The venue's open ladder markets, indexed once and shared.
- *
- * An earlier version re-fetched every candidate event by id, on the belief
- * that the list endpoint abridged its markets and omitted the description the
- * settlement instant is read out of. **That was wrong** — the list payload
- * carries `description` and `groupItemTitle` already — and it cost around
- * seven hundred extra round trips on a cold start, for an index that came out
- * the same either way. Measured: 51 of 100 list entries parse directly and 15
- * index, which is what the per-event fetches were producing.
- *
- * So pages are parsed where they land and fetched in parallel. What is left is
- * bounded by the venue's own page latency rather than by our fan-out.
- *
- * Deliberately no tag filter. Discovering only `tag_slug=crypto` would quietly
- * confine the product to the families that tag happens to carry, while the
- * engine prices any ladder the venue publishes.
- */
-
-const GAMMA = 'https://gamma-api.polymarket.com';
+/** All open categories are discovered; compiler eligibility is checked separately. */
 const TTL_MS = 10 * 60 * 1000;
-const MAX_PAGES = 15;
+
+/**
+ * Where the built index is kept between restarts.
+ *
+ * Discovery walks the venue's open catalogue using cursor pagination and the result changes on the order of hours. Holding that only in
+ * memory meant every restart re-read all of it, and in development that is
+ * every file save. Persisting it turns a restart inside the TTL into a disk
+ * read, and a restart outside the TTL into a stale-but-usable index that
+ * refreshes behind the user rather than in front of them.
+ */
+// Inside the store directory, which is already gitignored — this is a cache of
+// somebody else's public catalogue, not something to commit.
+const CACHE_FILE = join(
+  process.env.POLYHEDGE_STORE ?? join(process.cwd(), '.polyhedge-store'),
+  'market-index.json',
+);
+
+export interface MarketCategory {
+  slug: string;
+  label: string;
+  discoveredEvents: number;
+  supportedEvents: number;
+}
 
 export interface MarketIndex {
+  categories: MarketCategory[];
+  discoveredEvents: number;
+  /** False only for a legacy cache served while the complete catalogue refreshes. */
+  discoveryComplete: boolean;
   events: IndexedEvent[];
   resolutionText: Map<string, string>;
   bracketLabels: Map<string, string[]>;
@@ -34,59 +43,129 @@ export interface MarketIndex {
 
 let cached: MarketIndex | null = null;
 let inFlight: Promise<MarketIndex> | null = null;
+let fromDisk: Promise<MarketIndex | null> | null = null;
+let scannedEvents = 0;
+let refreshError: string | null = null;
 
-const PAGES = 15;
-const PAGE_CONCURRENCY = 6;
+export function discoveryStatus() {
+  return { refreshing: inFlight !== null, scannedEvents, error: refreshError };
+}
 
-async function page(offset: number): Promise<unknown[]> {
-  const res = await fetch(
-    `${GAMMA}/events?closed=false&limit=100&offset=${offset}&order=volume24hr&ascending=false`,
-  );
-  if (!res.ok) return [];
-  const body = (await res.json()) as unknown;
-  return Array.isArray(body) ? body : [];
+/**
+ * Bumped whenever the shape of what is cached changes.
+ *
+ * Without it, adding a field to `GammaEvent` leaves every running instance
+ * serving yesterday's shape from disk, with the new field silently absent —
+ * which is exactly how market links shipped pointing at the event instead of
+ * the bracket. A cache with no version is a cache that lies after a deploy.
+ */
+const CACHE_VERSION = 3;
+
+/** Maps do not survive JSON, so they cross as entries and are rebuilt on read. */
+interface OnDisk {
+  categories?: MarketCategory[];
+  discoveredEvents?: number;
+  discoveryComplete?: boolean;
+  version: number;
+  builtAt: number;
+  events: IndexedEvent[];
+  resolutionText: [string, string][];
+  bracketLabels: [string, string[]][];
+  byId: [string, GammaEvent][];
+}
+
+async function readCache(): Promise<MarketIndex | null> {
+  try {
+    const raw = JSON.parse(await readFile(CACHE_FILE, 'utf8')) as OnDisk;
+    if (raw.version !== CACHE_VERSION && raw.version !== 2) return null;
+    if (!Array.isArray(raw.events) || raw.events.length === 0) return null;
+    return {
+      categories: raw.categories ?? [],
+      discoveredEvents: raw.discoveredEvents ?? raw.events.length,
+      discoveryComplete: raw.version === CACHE_VERSION && raw.discoveryComplete === true,
+      events: raw.events,
+      resolutionText: new Map(raw.resolutionText),
+      bracketLabels: new Map(raw.bracketLabels),
+      byId: new Map(raw.byId),
+      builtAt: raw.builtAt,
+    };
+  } catch {
+    // No cache, a partial write, or a shape from an older build. Any of those
+    // means discovery runs — never that a request fails.
+    return null;
+  }
+}
+
+async function writeCache(index: MarketIndex): Promise<void> {
+  const payload: OnDisk = {
+    version: CACHE_VERSION,
+    categories: index.categories,
+    discoveredEvents: index.discoveredEvents,
+    discoveryComplete: index.discoveryComplete,
+    builtAt: index.builtAt,
+    events: index.events,
+    resolutionText: [...index.resolutionText],
+    bracketLabels: [...index.bracketLabels],
+    byId: [...index.byId],
+  };
+  try {
+    await mkdir(dirname(CACHE_FILE), { recursive: true });
+    // Written beside and renamed: a crash mid-write would otherwise leave a
+    // truncated file that parses as an index with a few hundred events missing.
+    const temporary = `${CACHE_FILE}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify(payload), 'utf8');
+    await rename(temporary, CACHE_FILE);
+  } catch {
+    // A cache that cannot be written is a slow start, not a broken one.
+  }
 }
 
 async function build(): Promise<MarketIndex> {
+  scannedEvents = 0;
+  refreshError = null;
   const index: MarketIndex = {
-    events: [],
-    resolutionText: new Map(),
-    bracketLabels: new Map(),
-    byId: new Map(),
-    builtAt: Date.now(),
+    categories: [], discoveredEvents: 0, discoveryComplete: false,
+    events: [], resolutionText: new Map(), bracketLabels: new Map(), byId: new Map(), builtAt: Date.now(),
   };
-
-  const offsets = Array.from({ length: PAGES }, (_, i) => i * 100);
-  const pages: unknown[][] = [];
-
-  // Pages in parallel, with a bound: the venue is not ours to flood, and past
-  // a handful at once its own latency is the floor anyway.
-  for (let i = 0; i < offsets.length; i += PAGE_CONCURRENCY) {
-    const batch = offsets.slice(i, i + PAGE_CONCURRENCY);
-    const got = await Promise.all(batch.map(page));
-    pages.push(...got);
-    // A short page means the listing ran out; nothing beyond it to ask for.
-    if (got.some((p) => p.length === 0)) break;
-  }
-
-  for (const listed of pages) {
-    for (const raw of listed) {
-      let event: GammaEvent;
-      try {
-        event = parseEvent(raw);
-      } catch {
-        // An event we cannot parse is an event we must not quote.
-        continue;
+  const categories = new Map<string, MarketCategory>();
+  const seen = new Set<string>();
+  for await (const page of openEventPages()) {
+    for (const raw of page) {
+      if (!raw || typeof raw !== 'object') throw new Error('Invalid discovery event');
+      const entry = raw as { id?: unknown; tags?: unknown };
+      if (typeof entry.id !== 'string') throw new Error('Discovery event has no ID');
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      index.discoveredEvents++;
+      scannedEvents = index.discoveredEvents;
+      const tags = new Set<string>();
+      if (Array.isArray(entry.tags)) {
+        for (const tag of entry.tags) {
+          if (!tag || typeof tag.slug !== 'string' || typeof tag.label !== 'string') continue;
+          if (tags.has(tag.slug)) continue;
+          tags.add(tag.slug);
+          const category = categories.get(tag.slug) ?? {
+            slug: tag.slug, label: tag.label, discoveredEvents: 0, supportedEvents: 0,
+          };
+          category.discoveredEvents++;
+          categories.set(tag.slug, category);
+        }
       }
+      // Keep category coverage even when this event cannot be compiled.
+      let event: GammaEvent;
+      try { event = parseEvent(raw); } catch { continue; }
       const one = indexEvent(event);
       if (one === null) continue;
+      for (const tag of tags) categories.get(tag)!.supportedEvents++;
       index.events.push(one);
       index.byId.set(event.id, event);
       index.resolutionText.set(one.eventId, event.markets[0]?.description ?? '');
-      index.bracketLabels.set(one.eventId, event.markets.map((m) => m.groupItemTitle));
+      index.bracketLabels.set(one.eventId, event.markets.map(m => m.groupItemTitle));
     }
   }
-
+  index.categories = [...categories.values()].sort((a, b) => a.label.localeCompare(b.label));
+  index.discoveryComplete = true;
+  index.builtAt = Date.now();
   return index;
 }
 
@@ -106,19 +185,47 @@ export function warmMarketIndex(): void {
   });
 }
 
-export async function marketIndex(): Promise<MarketIndex> {
-  if (cached !== null && Date.now() - cached.builtAt < TTL_MS) return cached;
+function refresh(): Promise<MarketIndex> {
   // Collapse concurrent cold starts onto one build rather than stampeding the
   // venue with identical discovery.
   inFlight ??= build()
     .then((built) => {
       cached = built;
+      void writeCache(built);
       return built;
+    })
+    .catch((error: unknown) => {
+      refreshError = error instanceof Error ? error.message : 'Catalogue refresh failed';
+      throw error;
     })
     .finally(() => {
       inFlight = null;
     });
   return inFlight;
+}
+
+export async function marketIndex(): Promise<MarketIndex> {
+  if (cached !== null && cached.discoveryComplete && Date.now() - cached.builtAt < TTL_MS) return cached;
+
+  if (cached === null) {
+    fromDisk ??= readCache();
+    const disk = await fromDisk;
+    if (disk !== null) cached = disk;
+  }
+
+  if (cached !== null) {
+    const age = Date.now() - cached.builtAt;
+    if (cached.discoveryComplete && age < TTL_MS) return cached;
+    // Stale but usable: serve it now and rebuild behind the request. A user
+    // waiting eight seconds to be told about markets that have barely changed
+    // is paying for our bookkeeping, not for their answer.
+    void refresh().catch(() => {
+      // The stale index stays served; the next request tries again.
+    });
+    return cached;
+  }
+
+  return refresh();
 }
 
 // Start discovery at import, so no request is the one that pays for it.

@@ -1,6 +1,6 @@
 import {
   buildBasket, buildStateSpace, dollarsToCents, levelsOf, priceMicros,
-  type Basket, type BookLevel, type Leg, type TargetShape, type TradableItem,
+  type Basket, type BookLevel, type Leg, type TargetShape, type TradableItem, type ProtectionGoal,
 } from '@polyhedge/core';
 import { parseLadder, parseLadderLabel, type ClobBook, type GammaEvent } from '@polyhedge/venue';
 
@@ -12,6 +12,9 @@ export interface QuoteRequest {
   extraLevels?: number[];
   /** Over-hedge penalty override, e.g. to request a "shaped" alternative solve. */
   mu?: number;
+  protectionGoal?: ProtectionGoal;
+  /** Use venue minimum sizes and the execution adapter's quantity precision. */
+  execution?: { quantityStep: number; maxLegs?: number };
   /**
    * Human-readable note on how this market's observation moment relates to
    * the user's deadline. Time basis risk, not merely "holding longer".
@@ -61,6 +64,16 @@ export interface QuoteOptions {
 /** The only place venue's plain numbers become core's branded types. */
 function toCoreBook(book: ClobBook | undefined): BookLevel[] {
   return (book?.asks ?? []).map((l) => ({ priceMicros: priceMicros(l.priceMicros), size: l.size }));
+}
+
+function executionConstraints(request: QuoteRequest, legs: Leg[], byToken: Map<string, ClobBook>) {
+  if (!request.execution) return {};
+  const minShares = legs.map(leg => {
+    const minimum = byToken.get(leg.tokenId)?.minOrderSize;
+    if (minimum === undefined) throw new Error(`book ${leg.tokenId} has no minimum order size; cannot claim an executable quote`);
+    return minimum;
+  });
+  return { execution: { ...request.execution, minShares } };
 }
 
 /**
@@ -154,6 +167,8 @@ export async function quote(
     ruleFlags,
     correlationResidual,
     ...(request.mu !== undefined ? { mu: request.mu } : {}),
+    ...(request.protectionGoal ? { protectionGoal: request.protectionGoal } : {}),
+    ...executionConstraints(request, legs, byToken),
   });
 
   return {
@@ -190,5 +205,7 @@ export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Ba
     ruleFlags: record.meta.ruleFlags,
     correlationResidual: record.meta.correlationResidual,
     mu: record.basket.mu,
+    ...(record.request.protectionGoal ? { protectionGoal: record.request.protectionGoal } : {}),
+    ...executionConstraints(record.request, record.resolved.legs, byToken),
   });
 }

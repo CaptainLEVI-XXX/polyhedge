@@ -1,0 +1,141 @@
+{
+  "examples": [
+    {
+      "id": "gradual-loss",
+      "source": "seed",
+      "split": "eval",
+      "text": "I hold BTC. By Dec 31 my loss starts at zero at 70,000 and grows steadily to $10,000 at 60,000, then stays at $10,000 below that. I can spend $500 to cover this loss.",
+      "expect": {
+        "kind": "interpreted",
+        "direction": "below",
+        "lossUsd": 10000,
+        "budgetUsd": 500,
+        "templateId": "linear_strip",
+        "levels": [
+          {
+            "value": 60000,
+            "role": "range_low"
+          },
+          {
+            "value": 70000,
+            "role": "range_high"
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-loss",
+      "source": "seed",
+      "split": "eval",
+      "text": "I own BTC and want protection if it ends below 60,000 by Dec 31. My budget is $300, but I have not decided how much loss to cover.",
+      "expect": {
+        "kind": "follow_up",
+        "templateId": null
+      }
+    },
+    {
+      "id": "ambiguous-loss",
+      "source": "seed",
+      "split": "eval",
+      "text": "I own BTC. If it ends below 60,000 by Dec 31, my loss could be $5,000 or $15,000. I am not sure which amount to insure. I can spend $300.",
+      "expect": {
+        "kind": "follow_up",
+        "templateId": null
+      }
+    },
+    {
+      "id": "unsupported-path-payoff",
+      "source": "seed",
+      "split": "eval",
+      "text": "I hold BTC. I lose $8,000 if BTC ever touches 60,000 before Dec 31, even if it recovers and finishes above 60,000. I need that touch-triggered payment, not protection based on the final price. My budget is $300.",
+      "expect": {
+        "kind": "declined",
+        "templateId": null
+      }
+    },
+    {
+      "id": "weather-cold",
+      "source": "seed",
+      "text": "I run outdoor events in Chicago and lose $12000 if the daily high is below 60\u00b0F on September 26. My protection budget is $600.",
+      "expect": {
+        "kind": "interpreted",
+        "lossUsd": 12000,
+        "templateId": "threshold_digital",
+        "levels": [
+          {
+            "value": 60,
+            "role": "threshold",
+            "unit": "\u00b0F"
+          }
+        ]
+      }
+    },
+    {
+      "id": "weather-negative",
+      "source": "seed",
+      "text": "I operate a nursery in Berlin and lose $5000 if the daily minimum temperature falls below -5\u00b0C on December 31. My hedge budget is $300.",
+      "expect": {
+        "kind": "interpreted",
+        "lossUsd": 5000,
+        "templateId": "threshold_digital",
+        "levels": [
+          {
+            "value": -5,
+            "role": "threshold",
+            "unit": "\u00b0C"
+          }
+        ]
+      }
+    },
+    {
+      "id": "weather-heat",
+      "source": "seed",
+      "text": "I operate outdoor events in Phoenix and lose $10000 if the daily maximum temperature exceeds 110\u00b0F on September 26. My hedge budget is $500.",
+      "expect": {
+        "kind": "interpreted",
+        "direction": "above",
+        "templateId": "threshold_digital",
+        "levels": [
+          {
+            "value": 110,
+            "role": "threshold",
+            "unit": "\u00b0F"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rate-threshold",
+      "source": "seed",
+      "text": "I have floating rate debt and lose $20000 if the Fed rate is above 5% by December 31. My hedge budget is $500.",
+      "expect": {
+        "kind": "interpreted",
+        "direction": "above",
+        "templateId": "threshold_digital",
+        "levels": [
+          {
+            "value": 5,
+            "role": "threshold",
+            "unit": "%"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gold-threshold",
+      "source": "seed",
+      "text": "I hold gold and lose $5000 if its price ends below $3500 per ounce by December 31. My hedge budget is $300.",
+      "expect": {
+        "kind": "interpreted",
+        "templateId": "threshold_digital",
+        "levels": [
+          {
+            "value": 3500,
+            "role": "threshold",
+            "unit": "$"
+          }
+        ]
+      }
+    }
+  ]
+}

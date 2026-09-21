@@ -19,7 +19,7 @@
 // added here that alters the shape must come back through
 // `residualVsPrimary`, never its own residual.
 
-import { quote, type QuoteDeps, type QuoteOptions, type QuoteRecord, type QuoteRequest } from '@polyhedge/engine';
+import { quote, quoteSession, type QuoteDeps, type QuoteOptions, type QuoteRecord, type QuoteRequest } from '@polyhedge/engine';
 import type { Residual } from '@polyhedge/core';
 
 export interface BasketOption {
@@ -52,44 +52,43 @@ const CHEAP_SHARE = 0.35;
 function distinct(a: QuoteRecord, b: QuoteRecord): boolean {
   const priceMoved = Math.abs(a.basket.totalCostCents - b.basket.totalCostCents) >= 100;
   const coverMoved = Math.abs(a.basket.residual.coverageRatio - b.basket.residual.coverageRatio) >= 0.005;
-  return priceMoved || coverMoved;
+  const netMoved = a.basket.worstNetLossCents !== undefined && b.basket.worstNetLossCents !== undefined
+    && Math.abs(a.basket.worstNetLossCents - b.basket.worstNetLossCents) >= 100;
+  return priceMoved || coverMoved || netMoved;
 }
 
-/**
- * Every stop prices against ONE book snapshot.
- *
- * Solving three times through the caller's deps would fetch books three times,
- * so the three prices would be taken at three different moments and would not
- * be strictly comparable — which is the one thing the stops are for. The books
- * are fetched once, memoised by token set, and the snapshot is saved once so
- * all three records name the same one.
- */
-function pinBooks(deps: QuoteDeps): QuoteDeps {
-  const books = new Map<string, Promise<Awaited<ReturnType<QuoteDeps['fetchBooks']>>>>();
-  let snapshot: Promise<string> | null = null;
-
-  return {
-    ...deps,
-    fetchEvent: deps.fetchEvent.bind(deps),
-    fetchBooks: (tokenIds) => {
-      const key = tokenIds.join(',');
-      let pending = books.get(key);
-      if (pending === undefined) {
-        pending = deps.fetchBooks(tokenIds);
-        books.set(key, pending);
-      }
-      return pending;
-    },
-    saveSnapshot: (b) => {
-      snapshot ??= deps.saveSnapshot(b);
-      return snapshot;
-    },
-  };
+function coverLine(record: QuoteRecord): string {
+  const gap = record.basket.residual.worstStateShortfallCents / 100;
+  return `Up to $${gap.toLocaleString('en-US')} of the requested payout remains uncovered before premium.`;
 }
 
-function coverLine(record: QuoteRecord, payoutUsd: number): string {
-  const covered = Math.round(payoutUsd * record.basket.residual.coverageRatio);
-  return `Pays about $${covered.toLocaleString('en-US')} of the $${payoutUsd.toLocaleString('en-US')} you said you could lose.`;
+function netOption(name: string, record: QuoteRecord): BasketOption {
+  const loss = (record.basket.worstNetLossCents ?? 0) / 100;
+  return { name, record, residual: record.basket.residual,
+    reason: `Worst remaining target loss, including premium and fees: $${loss.toLocaleString('en-US')}. Applies to the stated payout shape and settlement assumptions.` };
+}
+
+async function netOptions(request: QuoteRequest, pinned: QuoteDeps, options?: QuoteOptions,
+  primary?: QuoteRecord): Promise<BasketOption[]> {
+  if (request.protectionGoal?.kind === 'limit_net_loss') {
+    return [netOption('Your loss limit', primary ?? await quote(request, pinned, options))];
+  }
+  const { budgetUsd, ...uncapped } = request;
+  const full = budgetUsd === undefined && primary ? primary : await quote(uncapped, pinned, options);
+  const capped = budgetUsd === undefined ? full : primary ?? await quote(request, pinned, options);
+  const out = [netOption(budgetUsd === undefined ? 'Lowest remaining loss' : 'Your budget', capped)];
+  if (distinct(full, capped)) out.push(netOption('Lowest loss without a budget cap', full));
+  const unhedged = Math.max(...capped.basket.target);
+  const best = capped.basket.worstNetLossCents!;
+  // A point on the cost/risk frontier: cheapest basket achieving half the
+  // attainable loss reduction, not an arbitrary fraction of the premium.
+  if (unhedged - best >= 100) {
+    const smaller = await quote({ ...request, mu: 0,
+      protectionGoal: { kind: 'limit_net_loss', maxNetLossUsd: Math.ceil((unhedged + best) / 2) / 100 },
+    }, pinned, options);
+    if (out.every(o => distinct(smaller, o.record))) out.push(netOption('Lower premium', smaller));
+  }
+  return out.sort((a, b) => a.record.basket.totalCostCents - b.record.basket.totalCostCents);
 }
 
 /**
@@ -104,13 +103,17 @@ export async function buildBasketOptions(
   request: QuoteRequest,
   deps: QuoteDeps,
   options?: QuoteOptions,
+  /** Optional previously solved primary from the SAME request-scoped deps. */
+  primary?: QuoteRecord,
 ): Promise<BasketOption[]> {
-  const payoutUsd = 'payoutUsd' in request.shape ? request.shape.payoutUsd : 0;
-
   // Full cover: the same request with no budget cap at all. Note this drops
   // `budgetUsd` rather than setting it high — under `exactOptionalPropertyTypes`
   // an absent budget and a huge one are different things to the engine.
-  const pinned = pinBooks(deps);
+  const pinned = quoteSession(deps);
+  if (primary && JSON.stringify(primary.request) !== JSON.stringify(request)) {
+    throw new Error('option seed must have the same request');
+  }
+  if (request.protectionGoal) return netOptions(request, pinned, options, primary);
   const { budgetUsd, ...uncapped } = request;
   const full = await quote(uncapped, pinned, options);
 
@@ -118,7 +121,7 @@ export async function buildBasketOptions(
     // "Everything", not "Full cover": an uncapped solve is the most this
     // market's liquidity allows, which is not always all of the loss.
     name: full.basket.residual.coverageRatio >= 0.999 ? 'Everything' : 'As much as the book allows',
-    reason: `Spends whatever it takes, up to what this market can absorb. ${coverLine(full, payoutUsd)}`,
+    reason: `Spends whatever it takes, up to what this market can absorb. ${coverLine(full)}`,
     record: full,
     residual: full.basket.residual,
   }];
@@ -128,7 +131,7 @@ export async function buildBasketOptions(
     if (distinct(capped, full)) {
       out.push({
         name: 'Your budget',
-        reason: `What the $${budgetUsd.toLocaleString('en-US')} you named buys. ${coverLine(capped, payoutUsd)}`,
+        reason: `What the $${budgetUsd.toLocaleString('en-US')} you named buys. ${coverLine(capped)}`,
         record: capped,
         residual: capped.basket.residual,
       });
@@ -144,7 +147,7 @@ export async function buildBasketOptions(
         // uncapped cost. Naming it "cheapest" would claim an optimisation
         // nobody ran.
         name: 'Smaller',
-        reason: `About a third of the uncapped cost, and materially less cover. ${coverLine(cheap, payoutUsd)}`,
+        reason: `About a third of the uncapped cost, and materially less cover. ${coverLine(cheap)}`,
         record: cheap,
         residual: cheap.basket.residual,
       });

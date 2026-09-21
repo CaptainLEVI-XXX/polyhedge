@@ -1,14 +1,27 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Ladder } from './Ladder';
-import { Allocation } from './Allocation';
-import { readiness } from '@/lib/wallet-readiness';
-import { useSession } from './Session';
-import { Sparkline } from './Sparkline';
-import { RawData } from './RawData';
-import { useLiveQuote } from '@/lib/use-live-quote';
-import type { CoverOptionView, QuotedView } from '@/lib/view-model';
+import { useCallback, useRef, useState } from 'react';
+import { Connect } from './Session';
+import { Basket } from './Basket';
+import { Cards } from './Cards';
+import type { QuotedView } from '@/lib/view-model';
+
+/**
+ * The whole surface, in two states: choose a basket, or look inside one.
+ *
+ * It used to be one page with everything on it — eight panels of ladder,
+ * allocation, payout table, positions, assumptions, provenance and raw receipt,
+ * all at once, before the user had decided anything. That is not detail, it is
+ * noise standing between someone and a decision.
+ *
+ * So: the sentence produces a few complete baskets, shown as cards carrying
+ * only what distinguishes them. Opening one replaces the cards with everything
+ * about that basket, and Back returns. One decision per screen.
+ *
+ * The one thing that does NOT move behind a click is the shortfall. What a
+ * basket fails to cover is half of what it is, and a card that showed only cost
+ * and coverage would be advertising rather than quoting.
+ */
 
 type Result =
   | { kind: 'quoted'; quoteId: string; view: QuotedView }
@@ -26,608 +39,231 @@ const EXAMPLES = [
   "I hold 2 BTC and I'd be down about $8,000 if it ends below 77,000 by September 23. I can spend $600.",
   'I run outdoor events in Chicago and I would lose about $12,000 if it is cold on the 26th.',
   'I have $2M of floating-rate debt and every 25bp hike costs me about $5,000 a year.',
-  "I don't own any bitcoin but I reckon it is going to 100k and I want to put $500 on it.",
 ];
 
 export function Studio() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [result, setResult] = useState<Result | null>(null);
-  const [chosen, setChosen] = useState(0);
-  const [frozen, setFrozen] = useState<{ at: string; snapshotId: string } | null>(null);
+  const [opened, setOpened] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
+  const [lossLimit, setLossLimit] = useState('');
+  const [maxLegs, setMaxLegs] = useState('');
   const session = useRef<unknown>(undefined);
 
-  const submit = useCallback(async () => {
-    const words = text.trim();
-    if (words === '' || busy) return;
+  const ask = useCallback(
+    async (words: string) => {
+      if (words === '' || busy) return;
 
-    setTurns((t) => [...t, { who: 'you', text: words }]);
-    setText('');
-    setBusy(true);
+      setTurns((t) => [...t, { who: 'you', text: words }]);
+      setText('');
+      setBusy(true);
 
-    try {
-      const res = await fetch('/api/intake', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        // The session goes back as it was given. The server never rebuilds
-        // state by re-reading a transcript.
-        body: JSON.stringify({ text: words, session: session.current }),
-      });
-      const payload = (await res.json()) as { result?: Result; error?: string };
-      if (!res.ok || payload.result === undefined) {
-        throw new Error(payload.error ?? 'that did not work');
-      }
-
-      const r = payload.result;
-      if (r.kind === 'follow_up') {
-        session.current = r.session;
-        setTurns((t) => [...t, { who: 'ph', text: r.question }]);
-      } else {
-        session.current = undefined;
-        if (r.kind === 'quoted') {
-          const first = r.view.options[0];
-          setTurns((t) => [
-            ...t,
-            { who: 'ph', text: 'Built it.', why: `${first?.costLabel ?? ''} · ${first?.coverageLabel ?? ''} covered` },
-          ]);
-        } else if (r.kind === 'no_market_listed') {
-          setTurns((t) => [...t, { who: 'ph', text: 'Nothing is listed that settles by then.' }]);
-        } else {
-          setTurns((t) => [...t, { who: 'ph', text: 'Not something this will quote.', why: r.reason }]);
+      try {
+        const res = await fetch('/api/intake', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          // The session goes back as it was given. The server never rebuilds
+          // state by re-reading a transcript.
+          body: JSON.stringify({ text: words, session: session.current,
+            ...(lossLimit.trim() === '' ? {} : { maxNetLossUsd: Number(lossLimit) }),
+            ...(maxLegs.trim() === '' ? {} : { maxLegs: Number(maxLegs) }) }),
+        });
+        const payload = (await res.json()) as { result?: Result; error?: string };
+        if (!res.ok || payload.result === undefined) {
+          throw new Error(payload.error ?? 'that did not work');
         }
+
+        const r = payload.result;
+        if (r.kind === 'follow_up') {
+          session.current = r.session;
+          setTurns((t) => [...t, { who: 'ph', text: r.question }]);
+        } else {
+          session.current = undefined;
+          if (r.kind === 'quoted') {
+            setTurns((t) => [
+              ...t,
+              { who: 'ph', text: `Built ${r.view.options.length} ways to cover it.` },
+            ]);
+          } else if (r.kind === 'no_market_listed') {
+            setTurns((t) => [...t, { who: 'ph', text: 'Nothing is listed that settles by then.' }]);
+          } else {
+            setTurns((t) => [...t, { who: 'ph', text: 'Not something this will quote.', why: r.reason }]);
+          }
+        }
+        setOpened(null);
+        setResult(r);
+      } catch (error) {
+        setResult(null);
+        setTurns((t) => [
+          ...t,
+          { who: 'ph', text: error instanceof Error ? error.message : 'that did not work' },
+        ]);
+      } finally {
+        setBusy(false);
       }
-      setChosen(0);
-      setFrozen(null);
-      setResult(r);
-    } catch (error) {
-      setResult(null);
-      setTurns((t) => [
-        ...t,
-        { who: 'ph', text: error instanceof Error ? error.message : 'that did not work' },
-      ]);
-    } finally {
-      setBusy(false);
-    }
-  }, [text, busy]);
+    },
+    [busy, lossLimit, maxLegs],
+  );
+
+  const quoted = result?.kind === 'quoted' ? result : null;
+  const open = quoted !== null && opened !== null ? quoted.view.options[opened] : undefined;
+
+  // Inside a basket: nothing else on screen competes with it.
+  if (quoted !== null && open !== undefined) {
+    return (
+      <div className="wrap">
+        <Bar />
+        <Basket
+          quoteId={quoted.quoteId}
+          view={quoted.view}
+          index={opened as number}
+          onBack={() => setOpened(null)}
+        />
+        <Foot />
+      </div>
+    );
+  }
 
   return (
     <div className="wrap">
-      <div className="bar">
-        <span className="brand">PolyHedge</span>
-        <span className="tag">[beta]</span>
-        <span className="spacer" />
-        <Connect />
-      </div>
+      <Bar />
 
-      <div className="narrow-warning note warn" style={{ marginBottom: 16 }}>
+      <div className="narrow-warning note warn" style={{ marginBottom: 'var(--s5)' }}>
         This is built for a screen at least 1024px wide. Below that the ladder is a different
         design that does not exist yet, and shrinking this one would misrepresent it.
       </div>
 
-      <div className="box">
-        {turns.length > 0 && (
-          <div style={{ maxHeight: 280, overflowY: 'auto' }}>
-            {turns.map((turn, i) => (
-              <div className="turn" key={i}>
-                <span className="who">{turn.who === 'you' ? 'you' : 'ph'}</span>
-                <span className="msg">
-                  {turn.text}
-                  {turn.why !== undefined && <span className="why">{turn.why}</span>}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="composer">
-          <label htmlFor="exposure" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
-            Describe what you would lose
-          </label>
-          <textarea
-            id="exposure"
-            rows={1}
-            value={text}
-            placeholder="Describe what you would lose, and when…"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void submit();
-              }
-            }}
-          />
-          <button className="primary" onClick={() => void submit()} disabled={busy}>
-            {busy ? 'Working' : 'Build'}
-          </button>
+      {turns.length === 0 && (
+        <div style={{ marginBottom: 'var(--s6)' }}>
+          <h1 className="statement">Describe what you would lose.</h1>
+          <p className="lede">
+            Plain words are enough. What comes back is a small number of complete baskets, each
+            priced against the live book, each saying what it does not cover.
+          </p>
         </div>
+      )}
+
+      {turns.length > 0 && (
+        <div style={{ marginBottom: 'var(--s5)', maxHeight: 220, overflowY: 'auto' }}>
+          {turns.map((turn, i) => (
+            <div className="turn" key={i}>
+              <span className="who">{turn.who === 'you' ? 'you' : 'ph'}</span>
+              <span className="msg">
+                {turn.text}
+                {turn.why !== undefined && <span className="why">{turn.why}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="composer">
+        <label htmlFor="exposure" className="sr-only" style={SR_ONLY}>
+          Describe what you would lose
+        </label>
+        <textarea
+          id="exposure"
+          rows={1}
+          value={text}
+          placeholder="What would you lose, how much, and by when?"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void ask(text.trim());
+            }
+          }}
+        />
+        <button className="primary" onClick={() => void ask(text.trim())} disabled={busy}>
+          {busy ? 'Working' : 'Build'}
+        </button>
       </div>
 
+      <details style={{ marginTop: 'var(--s3)' }}>
+        <summary>Protection limits (optional)</summary>
+        <p className="note">Find the lowest-cost basket that keeps the remaining target loss, including premium and fees, below this amount in every modelled settlement state. Basis risk can leave more loss.</p>
+        <label htmlFor="loss-limit">Maximum remaining target loss ($) </label>
+        <input id="loss-limit" type="number" min="0" step="0.01" value={lossLimit}
+          disabled={busy} onChange={e => setLossLimit(e.target.value)} placeholder="Leave blank to minimize loss" />
+        <p><label htmlFor="max-positions">Maximum positions (optional) </label>
+          <input id="max-positions" type="number" min="1" max="30" step="1" value={maxLegs}
+            disabled={busy} onChange={e => setMaxLegs(e.target.value)} placeholder="No limit" /></p>
+        <p className="note">Fewer positions can cost more or leave more loss. Each quoted quantity respects the reported minimum order size and 0.01-share increments; fills are not guaranteed.</p>
+      </details>
+
       {turns.length === 0 && (
-        <div className="chips" style={{ marginTop: 14 }}>
+        <div className="chips" style={{ marginTop: 'var(--s4)' }}>
           {EXAMPLES.map((example, i) => (
-            <button key={i} className="chip" style={{ cursor: 'pointer' }} onClick={() => setText(example)}>
-              {example.slice(0, 44)}…
+            <button key={i} className="chip edit" onClick={() => setText(example)}>
+              {example.slice(0, 46)}…
             </button>
           ))}
         </div>
       )}
 
       {busy && (
-        <div className="box">
-          <div className="body empty">
-            <span className="spin" />
-            Reading your words, pulling live books, solving…
-          </div>
+        <div className="section empty">
+          <span className="spin" />
+          Reading your words, pulling live books, solving.
         </div>
       )}
 
-      {!busy && result?.kind === 'quoted' && (
-        <Quoted
-          view={result.view}
-          quoteId={result.quoteId}
-          chosen={chosen}
-          onChoose={setChosen}
-          frozen={frozen}
-          onFreeze={setFrozen}
-        />
+      {!busy && quoted !== null && (
+        <Cards view={quoted.view} onOpen={setOpened} onRefine={(t) => setText(t)} />
       )}
 
       {!busy && result?.kind === 'no_market_listed' && (
-        <NoMarket furthestListed={result.furthestListed} />
+        <div className="section">
+          <h2 className="statement">Nothing is listed that settles by then.</h2>
+          <p className="lede">
+            {result.furthestListed === null
+              ? 'This venue lists nothing on that subject at all.'
+              : `The furthest this venue lists is ${result.furthestListed}. A basket cannot be built past the last market that exists.`}
+          </p>
+        </div>
       )}
 
       {!busy && result?.kind === 'declined' && (
-        <div className="box">
-          <div className="body">
-            <h2 className="statement">Not something this will quote.</h2>
-            <p style={{ color: 'var(--ink-2)', marginBottom: 0 }}>{result.reason}</p>
-          </div>
+        <div className="section">
+          <h2 className="statement">Not something this will quote.</h2>
+          <p className="lede">{result.reason}</p>
         </div>
       )}
 
-      <p className="foot">
-        <span>
-          <strong>Not investment advice.</strong> This describes instruments and prices; it does
-          not recommend them.
-        </span>
-        <span className="spacer" />
-        <span>Every position can expire worthless. Prices move within seconds.</span>
-      </p>
+      <Foot />
     </div>
   );
 }
 
-function Quoted({
-  view: initial,
-  quoteId: initialId,
-  chosen,
-  onChoose,
-  frozen,
-  onFreeze,
-}: {
-  view: QuotedView;
-  quoteId: string;
-  chosen: number;
-  onChoose: (i: number) => void;
-  frozen: { at: string; snapshotId: string } | null;
-  onFreeze: (f: { at: string; snapshotId: string } | null) => void;
-}) {
-  // Watched only while unpinned. Pinning closes the stream, which is what makes
-  // "this price no longer moves" a fact about the system rather than a caption.
-  const live = useLiveQuote(initialId, frozen === null);
-  const view = live.view ?? initial;
-  const quoteId = live.quoteId;
-  const option = view.options[chosen] ?? view.options[0];
-  if (option === undefined) return null;
+const SR_ONLY = {
+  position: 'absolute' as const,
+  width: 1,
+  height: 1,
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+};
 
+function Bar() {
   return (
-    <>
-      <div className="box">
-        <div className="body">
-          <h2 className="statement">{view.statement}</h2>
-          {frozen === null && <FeedState live={live} />}
-        </div>
-      </div>
-
-      <Review
-        quoteId={quoteId}
-        option={option}
-        frozen={frozen}
-        onFreeze={onFreeze}
-      />
-
-      {view.options.length > 1 && !frozen && (
-        <div className="box">
-          <header>How much cover</header>
-          <div className="stops">
-            {view.options.map((o, i) => (
-              <button
-                key={o.id}
-                className="stop"
-                aria-pressed={i === chosen}
-                onClick={() => onChoose(i)}
-              >
-                <div className="stop-name">{o.name}</div>
-                <div className="stop-cost">{o.costLabel}</div>
-                <div className="stop-sub">{o.coverageLabel} of your loss covered</div>
-                <div className="meter">
-                  <span style={{ width: `${Math.min(100, o.coverageRatio * 100)}%` }} />
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="box">
-        <header>
-          <span>What it pays, and where it falls short</span>
-          <span className="spacer" />
-          <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--muted)' }}>
-            {option.ladder.payout.length} price ranges over {option.ladder.consideredCount / 2} brackets
-          </span>
-        </header>
-        <div className="body">
-          <Ladder ladder={option.ladder} />
-        </div>
-      </div>
-
-      <div className="box">
-        <header>Where the money goes</header>
-        <div className="body">
-          <Allocation ladder={option.ladder} />
-        </div>
-      </div>
-
-      <div className="box">
-        <header>The honest account</header>
-        <div className="body figs">
-          <Fig n={option.costLabel} l="Cost" />
-          <Fig n={option.coverageLabel} l="Coverage" h="of the loss you described" />
-          <Fig n={option.shortfallLabel} l="Worst shortfall" h={option.shortfallWhere ?? undefined} bad />
-          <Fig n={option.beyondOwedLabel} l="Beyond owed" h="paid where you owe nothing" />
-          {option.withinBracketLabel !== '$0.00' && (
-            <Fig n={option.withinBracketLabel} l="Within a bracket" h="the venue does not split where your loss does" />
-          )}
-        </div>
-      </div>
-
-      <div className="box">
-        <header>
-          <span>Positions</span>
-          <span className="spacer" />
-          <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--muted)' }}>
-            {option.ladder.heldCount} held of {option.ladder.consideredCount} considered
-          </span>
-        </header>
-        <div className="body">
-          <table>
-            <thead>
-              <tr>
-                <th>The question you are buying</th>
-                <th>Side</th>
-                <th className="num">Shares</th>
-                <th className="num">Price</th>
-                <th className="num">Cost</th>
-                <th className="num">Share of premium</th>
-                <th className="num">7d</th>
-              </tr>
-            </thead>
-            <tbody>
-              {option.ladder.positions.map((p) => (
-                <tr key={p.tokenId}>
-                  <td>
-                    {p.question !== '' ? p.question : p.bracketLabel}
-                    {p.question !== '' && (
-                      <span style={{ color: 'var(--muted)' }}> · {p.bracketLabel}</span>
-                    )}
-                  </td>
-                  <td><span className={`side ${p.side}`}>{p.side}</span></td>
-                  <td className="num">{Math.round(p.shares).toLocaleString('en-US')}</td>
-                  <td className="num">{p.priceLabel}</td>
-                  <td className="num">{p.costLabel}</td>
-                  <td className="num">{(p.premiumShare * 100).toFixed(1)}%</td>
-                  <td className="num"><Sparkline tokenId={p.tokenId} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {view.assumptions.length > 0 && (
-        <div className="box">
-          <header>Assumed on your behalf</header>
-          <div className="body">
-            <ul className="plain">
-              {view.assumptions.map((a, i) => <li key={i}>{a}</li>)}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      <div className="box">
-        <header>Provenance</header>
-        <div className="body">
-          <div className="chips">
-            <span className="chip">model <b>{view.provenance.model}</b></span>
-            <span className={`chip ${view.provenance.calibrationIsFitted ? '' : 'flag'}`}>
-              calibration <b>{view.provenance.calibration}</b>
-            </span>
-            <span className="chip">settles <b>{view.event.settlesLabel.slice(0, 16).replace('T', ' ')}</b></span>
-            <span className="chip">snapshot <b>{option.detail.snapshotId}</b></span>
-          </div>
-          {view.event.observationSource === 'endDate' && (
-            <p className="empty" style={{ marginBottom: 0, marginTop: 10 }}>
-              This market publishes no measurement time, so the settlement instant is taken from
-              when trading ends. For some families those are not the same moment.
-            </p>
-          )}
-          {!view.provenance.calibrationIsFitted && (
-            <p className="empty" style={{ marginBottom: 0, marginTop: 10 }}>
-              “unfitted” is literal — no calibration curve has been fitted, so the model’s
-              confidence figures are dispersion statistics, not probabilities of being right.
-            </p>
-          )}
-        </div>
-      </div>
-
-      <RawData option={option} view={view} />
-    </>
-  );
-}
-
-/**
- * The boundary between exploring and consenting.
- *
- * A price that moves while you read it means "what did I agree to" has no
- * answer, so pinning stops everything and fixes the record with its snapshot.
- * The clock is shown because a frozen quote is only honest for as long as the
- * book behind it holds, and re-pricing is an explicit act that produces a NEW
- * record rather than quietly editing this one.
- */
-/**
- * What the price on screen is currently worth as a claim.
- *
- * A live price and a price from a socket that died four minutes ago look
- * identical, so this says which one it is. Silence gets named rather than
- * rendered as calm.
- */
-function FeedState({ live }: { live: ReturnType<typeof useLiveQuote> }) {
-  const label =
-    live.feed === 'stale'
-      ? 'Lost the feed — this price is the last one we could confirm'
-      : live.feed === 'connecting'
-        ? 'Connecting to the book'
-        : live.reason === null
-          ? 'Live — re-prices when the book behind it moves'
-          : live.moved
-            ? `Re-priced — ${live.reason.replace(/_/g, ' ')}`
-            : `Re-checked — the book had not moved`;
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        marginTop: 12,
-        fontSize: 11,
-        letterSpacing: '0.06em',
-        textTransform: 'uppercase',
-        color: live.feed === 'stale' ? 'var(--short-ink)' : 'var(--muted)',
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: '50%',
-          background: live.feed === 'stale' ? 'var(--short-ink)' : 'var(--covered-ink)',
-        }}
-      />
-      {label}
+    <div className="bar">
+      <span className="brand">PolyHedge</span>
+      <span className="tag">beta</span>
+      <span className="spacer" />
+      <Connect />
     </div>
   );
 }
 
-function Review({
-  quoteId,
-  option,
-  frozen,
-  onFreeze,
-}: {
-  quoteId: string;
-  option: CoverOptionView;
-  frozen: { at: string; snapshotId: string } | null;
-  onFreeze: (f: { at: string; snapshotId: string } | null) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [age, setAge] = useState(0);
-
-  useEffect(() => {
-    if (frozen === null) return;
-    const started = Date.parse(frozen.at);
-    const tick = setInterval(() => setAge(Math.floor((Date.now() - started) / 1000)), 1000);
-    return () => clearInterval(tick);
-  }, [frozen]);
-
-  const freeze = async () => {
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/quote/${quoteId}/accept`, { method: 'POST' });
-      const body = (await res.json()) as { acceptedAt?: string; snapshotId?: string };
-      if (body.acceptedAt !== undefined && body.snapshotId !== undefined) {
-        onFreeze({ at: body.acceptedAt, snapshotId: body.snapshotId });
-        setAge(0);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Signing in proves identity and nothing else. Provisioning, approvals and a
-  // pUSD balance are each their own step, so they stay false and null here
-  // until the thing itself has happened — claiming them would make the UI offer
-  // an order the venue then refuses.
-  const session = useSession();
-  const ready = readiness(session.facts, 0);
-
-  if (frozen === null) {
-    return (
-      <div className="box">
-        <div className="body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: 'var(--ink-2)' }}>
-            This price moves with the book. Pin it to stop it and see exactly what you would be
-            agreeing to.
-          </span>
-          <span className="spacer" />
-          <button className="primary" onClick={() => void freeze()} disabled={busy}>
-            {busy ? 'Pinning' : 'Review this'}
-          </button>
-        </div>
-        <div className="note info">{ready.message}</div>
-      </div>
-    );
-  }
-
-  const stale = age > 60;
+function Foot() {
   return (
-    <div className="box" style={{ borderColor: stale ? 'var(--short)' : 'var(--ink)' }}>
-      <div className="body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <div>
-          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--muted)' }}>
-            PINNED — THIS PRICE NO LONGER MOVES
-          </div>
-          <div style={{ fontFamily: 'var(--serif)', fontSize: 24, marginTop: 4 }}>
-            {option.costLabel} for {option.paysLabel} of cover
-          </div>
-        </div>
-        <span className="spacer" />
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 10.5, letterSpacing: '0.08em', color: 'var(--muted)' }}>PINNED FOR</div>
-          <div style={{ fontSize: 22, color: stale ? 'var(--short-ink)' : 'var(--ink)' }}>
-            {Math.floor(age / 60)}:{String(age % 60).padStart(2, '0')}
-          </div>
-        </div>
-        <button onClick={() => onFreeze(null)}>Unpin</button>
-        <button className="primary" disabled={!ready.canPlace} title={ready.message}>
-          Place {option.ladder.heldCount} orders
-        </button>
-      </div>
-      <div className="note warn">
-        {ready.message} Orders settle in pUSD, which is not the USDC you may already hold — it has
-        to be deposited and wrapped first.
-      </div>
-      <div className="note info">
-        These {option.ladder.heldCount} orders go one at a time, thinnest book first, and you will
-        be asked to sign <strong>{option.ladder.heldCount} times</strong>. There is no way to place
-        them as one transaction. If a later one fails you will hold part of a hedge, and selling
-        that back is more signatures — so if you leave before doing it, you keep the part you
-        already bought until you come back.
-      </div>
-      {stale && (
-        <div className="note stop">
-          This was priced over a minute ago and the book has almost certainly moved. Re-price
-          before acting on it — that produces a new quote rather than changing this one.
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * A refusal is the product working, not an error — so it gets a screen rather
- * than a red toast. For a distant date there is genuinely no instrument, and
- * this is the most common answer the product gives, so it explains the shape
- * of the problem rather than describing it.
- */
-function NoMarket({ furthestListed }: { furthestListed: string | null }) {
-  if (furthestListed === null) {
-    return (
-      <div className="box">
-        <div className="body">
-          <h2 className="statement">Nothing is listed for this at all.</h2>
-          <p style={{ color: 'var(--ink-2)', marginBottom: 0 }}>
-            No market we can read settles on this subject right now.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const furthest = new Date(furthestListed);
-  const today = new Date();
-  const days = Math.max(0, Math.round((furthest.getTime() - today.getTime()) / 86_400_000));
-  const listedWidth = 14;
-
-  return (
-    <div className="box">
-      <div className="body">
-        <h2 className="statement">
-          Nothing settles that late. The furthest is {furthestListed.slice(0, 10)}.
-        </h2>
-        <p style={{ color: 'var(--ink-2)', maxWidth: 760 }}>
-          These markets list on a rolling window, so a later date is a matter of waiting rather
-          than of looking harder.
-        </p>
-
-        <svg viewBox="0 0 1140 86" width="100%" role="img"
-          aria-label={`Markets are listed up to ${furthestListed.slice(0, 10)}. The date you asked for is about ${days} days beyond that.`}>
-          <line x1="10" y1="48" x2="1130" y2="48" stroke="var(--ink)" />
-          <rect x="10" y="32" width={listedWidth * 10} height="32" fill="var(--covered)" stroke="var(--ink)" />
-          <text x={10 + listedWidth * 5} y="24" textAnchor="middle" style={{ font: '500 11px var(--mono)', fill: 'var(--ink)' }}>listed</text>
-          <text x={10 + listedWidth * 5} y="53" textAnchor="middle" style={{ font: '400 10px var(--mono)', fill: 'var(--ink)' }}>
-            to {furthestListed.slice(5, 10)}
-          </text>
-          <line x1="1060" y1="26" x2="1060" y2="70" stroke="var(--short)" strokeWidth="2" />
-          <text x="1060" y="18" textAnchor="middle" style={{ font: '500 11px var(--mono)', fill: 'var(--short-ink)' }}>you asked for</text>
-          <text x="580" y="44" textAnchor="middle" style={{ font: '400 10.5px var(--mono)', fill: 'var(--faint)' }}>
-            nothing trades in here
-          </text>
-        </svg>
-      </div>
-
-      <div className="note info">
-        Quoting the nearest listed date instead would cover a different date than the one you asked
-        about. That substitution is the thing this refuses to make quietly.
-      </div>
-    </div>
-  );
-}
-
-function Connect() {
-  const session = useSession();
-
-  if (session.status === 'connecting') return <span className="tag">connecting…</span>;
-
-  if (session.address === null) {
-    return (
-      <button onClick={session.login} style={{ padding: '6px 14px' }}>
-        Sign in
-      </button>
-    );
-  }
-
-  const short = `${session.address.slice(0, 6)}…${session.address.slice(-4)}`;
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-      <span className="tag">{short}</span>
-      <button onClick={session.logout} style={{ padding: '6px 12px' }}>
-        Sign out
-      </button>
-    </span>
-  );
-}
-
-function Fig({ n, l, h, bad }: { n: string; l: string; h?: string | undefined; bad?: boolean }) {
-  return (
-    <div className={`fig${bad === true ? ' bad' : ''}`}>
-      <div className="n">{n}</div>
-      <div className="l">{l}</div>
-      {h !== undefined && <div className="h">{h}</div>}
-    </div>
+    <p className="foot">
+      <span>
+        <strong style={{ color: 'var(--muted)' }}>Not investment advice.</strong> This describes
+        instruments and prices; it does not recommend them.
+      </span>
+      <span className="spacer" />
+      <span>Every position can expire worthless. Prices move within seconds.</span>
+    </p>
   );
 }

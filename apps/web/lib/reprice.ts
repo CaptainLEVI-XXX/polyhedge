@@ -1,8 +1,10 @@
 import { fetchBooks, fetchEvent } from '@polyhedge/venue';
-import { quote } from '@polyhedge/engine';
+import { quote, quoteSession } from '@polyhedge/engine';
+import { buildAlternatives, buildBasketOptions } from '@polyhedge/intake';
 import { putQuote, putSnapshot, type StoredQuote } from './store.js';
 import { marketIndex } from './markets.js';
-import { toOptionView, toQuotedView } from './view-model.js';
+import { composeView } from './compose.js';
+import { linkForMarket } from './venue-links.js';
 import type { QuotedView } from './view-model.js';
 
 /**
@@ -10,8 +12,17 @@ import type { QuotedView } from './view-model.js';
  *
  * Shared by the request route and the stream, because they must produce the
  * same thing. A stream that re-priced by a slightly different path would give a
- * user one number while watching and another on reload, and there would be no
- * way to say which was real.
+ * user one number while watching and another on reload, with no way to say
+ * which was real.
+ *
+ * It rebuilds **every** basket, not just the one being looked at. An earlier
+ * version rebuilt a single hardcoded option, which quietly deleted the other
+ * baskets on the first tick of the stream — and the comparison between baskets
+ * is the entire decision this product exists to support.
+ *
+ * None of this calls the model. `intake()` does the language work once and
+ * produces a `QuoteRequest`; everything here is solving against fresh books, so
+ * a re-price costs venue latency and some WASM, not a model round trip.
  *
  * It never mutates what it re-prices. The previous row stays exactly as it was
  * read and the result is a NEW row pointing back at it — the question a quote
@@ -42,34 +53,43 @@ export async function reprice(previous: StoredQuote, owner: string): Promise<Rep
   const questionFor = (marketId: string): string =>
     gamma?.markets.find((m) => m.id === marketId)?.question ?? '';
 
-  const record = await quote(previous.record.request, {
-    fetchEvent: async (eventId) => index.byId.get(eventId) ?? (await fetchEvent(eventId)),
+  const deps = quoteSession({
+    fetchEvent: async (eventId: string) => index.byId.get(eventId) ?? (await fetchEvent(eventId)),
     fetchBooks,
     saveSnapshot: putSnapshot,
   });
 
-  const view = toQuotedView(
-    record,
-    event,
-    [
-      toOptionView(
-        'stop-0',
-        previous.view.options[0]?.name ?? 'Your budget',
-        '',
-        record,
-        event.ladder.unit,
-        questionFor,
-      ),
-    ],
-    previous.view.assumptions,
-  );
+  // The primary first: it is the record the quote is identified by, and every
+  // alternative is re-measured against its target.
+  const options = {
+    calibrationMapVersion: previous.record.meta.calibrationMapVersion,
+    jevModelVersion: previous.record.meta.jevModelVersion,
+    ruleFlags: previous.record.meta.ruleFlags,
+    correlationResidual: previous.record.meta.correlationResidual,
+  };
+  const primary = await quote(previous.record.request, deps, options);
 
-  const next = await putQuote(owner, record, view, previous.id, previous.revision + 1);
+  // `buildBasketOptions` pins one snapshot across its own solves, so the
+  // baskets it returns are priced at the same instant and stay comparable.
+  const stops = await buildBasketOptions(previous.record.request, deps, options, primary);
+  const alternatives = primary.request.protectionGoal ? [] : await buildAlternatives(primary, deps, options);
+
+  const { view, optionRecords } = composeView({
+    primary,
+    event,
+    stops,
+    alternatives,
+    assumptions: previous.view.assumptions,
+    questionFor,
+    linkFor: (marketId) => linkForMarket(gamma, marketId),
+  });
+
+  const next = await putQuote(owner, primary, view, previous.id, previous.revision + 1, optionRecords);
 
   return {
     next,
     view,
-    snapshotId: record.resolved.snapshotId,
-    snapshotChanged: record.resolved.snapshotId !== previous.record.resolved.snapshotId,
+    snapshotId: primary.resolved.snapshotId,
+    snapshotChanged: primary.resolved.snapshotId !== previous.record.resolved.snapshotId,
   };
 }

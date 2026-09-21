@@ -46,7 +46,7 @@ async function basket(): Promise<SettlementBasket> {
     fetchEvent: async () => ({ id: 'event', slug: 'btc', title: 'BTC', negRisk: true,
       negRiskMarketId: '0x1', endDate: now, tags: [], seriesTickers: [],
       markets: ['<68000', '>=68000'].map((title, i) => ({ id: `m${i}`, question: title,
-        groupItemTitle: title, description: '', yesTokenId: `y${i}`, noTokenId: `n${i}`,
+        groupItemTitle: title, description: '', slug: null, yesTokenId: `y${i}`, noTokenId: `n${i}`,
         yesPrice: 0.5, tickSize: 0.01, feeRate: 0, endDate: now })),
     }),
     fetchBooks: async ids => ids.map(assetId => ({ assetId, market: 'condition', timestamp: '1', hash: 'book',

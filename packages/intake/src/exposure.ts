@@ -6,6 +6,7 @@
 import type { Answer, Question, QuestionEngine } from '@polyhedge/questions';
 import { findNumbers, parseDeadline, type NumberCandidate } from './parse.js';
 import type { Parsed } from './types.js';
+import { buildRawShapeQuestion } from './shape.js';
 
 export class UnsupportedUnderlyingError extends Error {
   constructor(message: string) {
@@ -24,10 +25,10 @@ const ROLE_CRITERIA: Record<string, string> = {
   holding: 'The amount of the underlying the user currently holds.',
   loss: 'The dollar amount the user could lose, or is trying to protect against.',
   budget: 'The amount the user is willing to spend on the hedge or protection itself.',
-  threshold: 'A single price level the position loses below or above.',
-  range_low: 'The lower bound of a price range that defines the loss condition.',
-  range_high: 'The upper bound of a price range that defines the loss condition.',
-  unrelated: 'Not related to holdings, losses, budget, or price levels for this hedge.',
+  threshold: 'A single numeric level the position loses below or above.',
+  range_low: 'The numerically LOWER numeric endpoint of either a comfortable range OR a gradual loss ramp. For a falling-value loss ramp this is where the loss reaches its maximum, not where it starts. A numeric endpoint is not a dollar loss amount.',
+  range_high: 'The numerically HIGHER numeric endpoint of either a comfortable range OR a gradual loss ramp. For a falling-value loss ramp this is where the loss starts at zero. A numeric endpoint is not a dollar loss amount.',
+  unrelated: 'Not related to holdings, losses, budget, or numeric levels for this hedge.',
 };
 
 const LOSS_DIRECTION_CRITERIA: Record<string, string> = {
@@ -35,6 +36,11 @@ const LOSS_DIRECTION_CRITERIA: Record<string, string> = {
   loses_above_level: 'The position loses value when the underlying rises above a single level.',
   loses_outside_range: 'The position loses value when the underlying moves outside a two-sided range.',
 };
+
+/** Only identifies prose needing a semantic check; it never decides the answer. */
+export function needsPathCheck(text: string): boolean {
+  return /\b(touch(?:es|ed)?|ever|recovers?|at any (?:time|point)|barrier|knock[ -]?(?:in|out)|path[ -]dependent)\b/i.test(text);
+}
 
 function roleQuestion(text: string, candidate: NumberCandidate): Question {
   return {
@@ -53,6 +59,17 @@ export function buildExposureQuestions(
   deadline: Parsed<string> | null,
 ): Record<string, Question> {
   const questions: Record<string, Question> = {};
+  if (needsPathCheck(text)) {
+    questions['settlementBasis'] = {
+      kind: 'choice',
+      instructions: `Read the whole request, including negations: "${text}". Does the requested payment depend on an intermediate crossing independently of the final observed outcome? Do not classify a final temperature maximum or other explicitly named settlement statistic as a crossing contract.`,
+      criteria: {
+        final: 'Only the final observed outcome/statistic determines the payment; intermediate observed value moves do not trigger a separate payment.',
+        path: 'An intermediate touch or crossing triggers or cancels the payment even if the price later recovers; final price alone cannot determine it.',
+        unclear: 'The user has not made this distinction clear.',
+      },
+    };
+  }
 
   candidates.forEach((candidate, i) => {
     questions[`role_${i}`] = roleQuestion(text, candidate);
@@ -92,11 +109,12 @@ export function buildExposureQuestions(
  * `fit.ts` asks the model whether a candidate settles on the same thing. A
  * subject with no listed market fails there, honestly, instead of here.
  */
-export async function extractExposure(text: string, today: Date, engine: QuestionEngine): Promise<ExtractionResult> {
+export async function extractExposure(text: string, today: Date, engine: QuestionEngine, combinedShape = false): Promise<ExtractionResult> {
   const candidates = findNumbers(text);
   const deadline = parseDeadline(text, today);
 
-  const questions = buildExposureQuestions(text, candidates, deadline);
+  const questions = { ...buildExposureQuestions(text, candidates, deadline),
+    ...(combinedShape ? buildRawShapeQuestion(text) : {}) };
   const { answers, modelVersion } = await engine.ask(text, questions);
 
   return { candidates, answers, modelVersion };

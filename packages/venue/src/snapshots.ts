@@ -12,6 +12,7 @@ const parsedLevelSchema = z.object({ priceMicros: z.number(), size: z.number() }
 const clobBookSchema = z.object({
   market: z.string(), assetId: z.string(), timestamp: z.string(), hash: z.string(),
   bids: z.array(parsedLevelSchema), asks: z.array(parsedLevelSchema),
+  minOrderSize: z.number().finite().nonnegative().optional(),
 });
 const clobBooksSchema = z.array(clobBookSchema);
 
@@ -47,5 +48,6 @@ export async function loadSnapshot(dir: string, id: string): Promise<ClobBook[]>
   if (!parsed.success) {
     throw new Error(`snapshot ${id} in ${dir} failed validation: ${parsed.error.message}`);
   }
-  return parsed.data;
+  return parsed.data.map(({ minOrderSize, ...book }) => ({ ...book,
+    ...(minOrderSize === undefined ? {} : { minOrderSize }) }));
 }

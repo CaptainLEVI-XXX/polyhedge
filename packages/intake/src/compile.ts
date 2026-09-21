@@ -149,7 +149,7 @@ function buildShape(
 export function compile(
   exposure: TypedExposure,
   templateId: PriceTemplateId,
-  candidate: IndexedEvent,
+  candidate: Pick<IndexedEvent, 'eventId' | 'observationNote'>,
 ): QuoteRequest {
   const payoutUsd = exposure.lossUsd.value * exposure.hedgeRatio;
 

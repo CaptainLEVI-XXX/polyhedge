@@ -61,7 +61,9 @@ function highs() { highsPromise ??= loadHighs(); return highsPromise; }
 
 export async function solveLp(model: LpModel, phaseName = 'unknown'): Promise<LpSolution> {
   const h = await highs();
-  const result = h.solve(model.text, { ...SOLVER_OPTIONS });
+  const result = h.solve(model.text, { ...SOLVER_OPTIONS,
+    ...(model.mixedInteger ? { solver: 'choose' as const, presolve: 'on' as const,
+      mip_rel_gap: 0, mip_abs_gap: 1e-8, time_limit: 2 } : {}) });
 
   const status = String(result.Status);
   if (status !== 'Optimal') throw new LpNotOptimalError(status, phaseName);
@@ -93,6 +95,15 @@ export async function solveLexicographic(
   // RULING D: `mu` lives in LpInput only. The plan passed it both ways,
   // which invites the two copies to drift apart.
   const withBudget = { ...input, budgetCents };
+
+  if (input.protectionGoal?.kind === 'limit_net_loss') {
+    const limit = input.protectionGoal.maxNetLossUsd;
+    if (!Number.isFinite(limit) || limit < 0) throw new Error('maxNetLossUsd must be finite and nonnegative');
+    const model = buildLpModel(withBudget, { kind: 'cost', maxShortfallDollars: limit });
+    const solution = await solveLp(model, 'loss limit');
+    // This mode has one solve: both hashes name that exact constraint model.
+    return { solution, maxShortfallDollars: limit, phase1Hash: model.hash, phase2Hash: model.hash };
+  }
 
   const phase1 = buildLpModel(withBudget, { kind: 'minimax' });
   const r1 = await solveLp(phase1, 'minimax');

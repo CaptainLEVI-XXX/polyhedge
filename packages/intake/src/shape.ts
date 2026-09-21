@@ -70,7 +70,7 @@ void _priceTemplateIdsAreTemplateIds;
 
 export type ShapeSelection =
   | { kind: 'template'; templateId: SelectableTemplateId; confidence: number; modelVersion: string }
-  | { kind: 'decline'; reason: string; modelVersion: string };
+  | { kind: 'decline'; reason: string; modelVersion: string; clarify?: boolean };
 
 /** The one question id this call asks under. */
 export const SHAPE_QUESTION_ID = 'priceTemplate';
@@ -92,11 +92,11 @@ export const SHAPE_CONFIDENCE_THRESHOLD = 0.6;
 // criterion written in our jargon asks the model to know our codebase.
 const TEMPLATE_CRITERIA: Record<string, string> = {
   threshold_digital:
-    'Pays a fixed amount whenever the price ends below (or above) one level, and nothing otherwise. ' +
-    'One level, one all-or-nothing payment, the same size however far past the level the price ends.',
+    'Pays a fixed amount whenever the observed value ends below (or above) one level, and nothing otherwise. ' +
+    'One level, one all-or-nothing payment, the same size however far past the level the observed value ends.',
   range_protect:
-    'Pays whenever the price ends outside a two-sided range — either below the lower level or above the ' +
-    'upper one. The user is comfortable while the price stays between the two levels and loses on a move ' +
+    'Pays whenever the observed value ends outside a two-sided range — either below the lower level or above the ' +
+    'upper one. The user is comfortable while the observed value stays between the two levels and loses on a move ' +
     'out of that band in either direction.',
   linear_strip:
     'The loss grows steadily between two levels rather than switching on at one. A small move past the ' +
@@ -104,7 +104,7 @@ const TEMPLATE_CRITERIA: Record<string, string> = {
     'amounts in between are proportional.',
   [NONE_FIT_KEY]:
     'None of the above describes this loss. The payoff the user wants is some other shape, or what they ' +
-    'described is not a loss on the price of the asset at all.',
+    'described is not a loss determined by a numeric outcome (for example, a yes/no political event).',
 };
 
 const ROLE_WORDS: Record<NamedLevel['role'], string> = {
@@ -121,10 +121,10 @@ const ROLE_WORDS: Record<NamedLevel['role'], string> = {
  */
 function describeLevels(levels: NamedLevel[]): string {
   if (levels.length === 0) {
-    return 'The user named no price levels.';
+    return 'The user named no numeric levels.';
   }
   const parts = levels.map((level) => `${level.value} (${ROLE_WORDS[level.role]})`);
-  return `The price levels the user gave, with the role each plays: ${parts.join('; ')}.`;
+  return `The numeric levels the user gave, with the role each plays: ${parts.join('; ')}.`;
 }
 
 /**
@@ -144,7 +144,20 @@ export function buildShapeQuestion(exposure: TypedExposure): Record<string, Ques
       instructions:
         `The user described their position in their own words: "${exposure.rawText}". ` +
         `${describeLevels(exposure.levels)} ` +
-        'Which description below matches the payoff that would make this user whole?',
+        'The measured value can be a price, temperature, rate, or another numeric outcome. Which description below matches the payoff that would make this user whole?',
+      criteria: TEMPLATE_CRITERIA,
+    },
+  };
+}
+
+/** No extracted roles exist yet when this question is batched with extraction. */
+export function buildRawShapeQuestion(text: string): Record<string, Question> {
+  return {
+    [SHAPE_QUESTION_ID]: {
+      kind: 'choice',
+      instructions: `The user described their position in their own words: "${text}". ` +
+        'The measured value can be a price, temperature, rate, or another numeric outcome. Which description below matches the payoff that would make this user whole? ' +
+        'Use only the stated loss behaviour; do not invent missing levels or amounts.',
       criteria: TEMPLATE_CRITERIA,
     },
   };
@@ -180,7 +193,16 @@ export async function selectShape(
 ): Promise<ShapeSelection> {
   const questions = buildShapeQuestion(exposure);
   const { answers, modelVersion } = await engine.ask(exposure.rawText, questions);
+  return readShapeAnswer(exposure, answers, modelVersion, calibration, threshold);
+}
 
+export function readShapeAnswer(
+  exposure: TypedExposure,
+  answers: Record<string, Answer>,
+  modelVersion: string,
+  calibration: CalibrationMap = IDENTITY_CALIBRATION,
+  threshold = SHAPE_CONFIDENCE_THRESHOLD,
+): ShapeSelection {
   const raw: Answer | undefined = answers[SHAPE_QUESTION_ID];
   if (raw === undefined) {
     throw new Error(`selectShape: no answer for question "${SHAPE_QUESTION_ID}"`);
@@ -211,7 +233,7 @@ export async function selectShape(
   const routed = route({ [SHAPE_QUESTION_ID]: answer }, { [SHAPE_QUESTION_ID]: policy }, exposure.followUpsAsked);
 
   if (routed.kind === 'decline') {
-    return { kind: 'decline', reason: routed.reason, modelVersion };
+    return { kind: 'decline', clarify: true, reason: 'I could not tell whether your loss switches on at one level, occurs outside a range, or grows gradually between two levels. Please describe when it starts and how it changes.', modelVersion };
   }
 
   if (answer.choice === NONE_FIT_KEY) {
@@ -234,4 +256,28 @@ export async function selectShape(
     confidence: answer.confidence,
     modelVersion,
   };
+}
+
+/** A speculative batched answer cannot bypass extraction or compatibility gates. */
+export async function selectExtractedShape(
+  exposure: TypedExposure,
+  extraction: { answers: Record<string, Answer>; modelVersion: string },
+  engine: QuestionEngine,
+  calibration: CalibrationMap = IDENTITY_CALIBRATION,
+): Promise<ShapeSelection> {
+  const raw = extraction.answers[SHAPE_QUESTION_ID];
+  if (raw?.kind === 'choice' && Number.isFinite(raw.confidence)
+    && (isSelectableTemplateId(raw.choice) || raw.choice === NONE_FIT_KEY)) {
+    const selection = readShapeAnswer(exposure, extraction.answers, extraction.modelVersion, calibration);
+    if (selection.kind === 'template') {
+      const roles = new Set(exposure.levels.map(l => l.role));
+      const required = selection.templateId === 'threshold_digital'
+        ? roles.has('threshold') : roles.has('range_low') && roles.has('range_high');
+      const consistent = (selection.templateId === 'range_protect') === (exposure.direction === 'outside');
+      if (required && consistent) return selection;
+    }
+  }
+  // Preserve the detailed path for ambiguous, absent, unsupported or
+  // structurally inconsistent answers. Its original confidence gate remains.
+  return selectShape(exposure, engine, calibration);
 }

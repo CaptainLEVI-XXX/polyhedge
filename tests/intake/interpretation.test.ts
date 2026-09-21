@@ -8,6 +8,12 @@ import { type TypedExposure } from '../../packages/intake/src/types.js';
 import { selectShape, buildShapeQuestion, SHAPE_QUESTION_ID } from '../../packages/intake/src/shape.js';
 
 describe('findNumbers', () => {
+  it('preserves signed temperatures and units without turning range separators into signs', () => {
+    expect(findNumbers('below -5°C or −10 degrees Fahrenheit').map(n => [n.value, n.unit]))
+      .toEqual([[-5, '°C'], [-10, '°F']]);
+    expect(findNumbers('60-70°F').map(n => n.value)).toEqual([60, 70]);
+    expect(findNumbers('5% or 25 bps').map(n => [n.value, n.unit])).toEqual([[5, '%'], [25, 'bps']]);
+  });
   it('extracts four numbers with distinguishable context', () => {
     const text = 'I hold $40k of BTC, could lose $8k below $60k, and can spend $300 on protection';
     const candidates = findNumbers(text);
@@ -30,6 +36,11 @@ describe('findNumbers', () => {
 
 describe('parseDeadline', () => {
   const today = new Date('2026-09-20T00:00:00Z');
+  it('reads a named observation date and allows a later explicit correction', () => {
+    expect(parseDeadline('cold on September 26', today)?.value).toBe('2026-09-26');
+    expect(parseDeadline('on September 26. My deadline is by Sept 27.', today)?.value).toBe('2026-09-27');
+    expect(parseDeadline('on February 30', today)).toBeNull();
+  });
 
   it('infers the year for "by Dec 31" when it has not passed yet', () => {
     const result = parseDeadline('Hedge this by Dec 31 please', today);

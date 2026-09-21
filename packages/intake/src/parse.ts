@@ -9,6 +9,7 @@ import type { Parsed, Provenance } from './types.js';
 
 export interface NumberCandidate {
   value: number;
+  unit?: string;
   /** Exactly as written, e.g. "$40k". */
   raw: string;
   /** Surrounding words, enough for a model to assign a role later. */
@@ -17,13 +18,13 @@ export interface NumberCandidate {
   index: number;
 }
 
-const NUMBER_PATTERN = /\$?\d[\d,]*(?:\.\d+)?[kKmM]?/g;
+const NUMBER_PATTERN = /(?<![\d.])[-−]?\$?\d[\d,]*(?:\.\d+)?[kKmM]?/g;
 const CONTEXT_WORD_WINDOW = 4;
 
 /** Parses "$40k" / "$40,000" / "40k" / "$8,000" / "300" / "$60k" into a number. */
 function parseAmount(raw: string): number | null {
-  const withoutDollar = raw.replace(/\$/g, '');
-  const suffixMatch = /^([\d,]+(?:\.\d+)?)([kKmM])$/.exec(withoutDollar);
+  const withoutDollar = raw.replace(/\$/g, '').replace('−', '-');
+  const suffixMatch = /^(-?[\d,]+(?:\.\d+)?)([kKmM])$/.exec(withoutDollar);
   if (suffixMatch) {
     const numPart = suffixMatch[1];
     const suffix = suffixMatch[2];
@@ -60,7 +61,10 @@ export function findNumbers(text: string): NumberCandidate[] {
     const value = parseAmount(raw);
     if (value === null) continue;
 
+    const suffix = text.slice(index + raw.length).match(/^\s*(°\s*[CF]\b|degrees?\s+(?:Fahrenheit|Celsius)\b|Fahrenheit\b|Celsius\b|%|bps\b)/i)?.[1];
+    const unit = suffix ? /fahrenheit|f$/i.test(suffix) ? "°F" : /celsius|c$/i.test(suffix) ? "°C" : suffix.toLowerCase() : raw.startsWith("$") ? "$" : undefined;
     candidates.push({
+      ...(unit ? { unit } : {}),
       value,
       raw,
       context: extractContext(text, index, raw.length),
@@ -86,7 +90,18 @@ const MONTHS: Record<string, number> = {
   dec: 12, december: 12,
 };
 
-const DEADLINE_PATTERN = /\bby\s+([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/gi;
+/**
+ * `\s*` between the month and the day, not `\s+`: people type "Sept26" as often
+ * as "Sept 26", and an answer that reads perfectly to a human returned null —
+ * so the same question was asked again, verbatim, as though nothing had been
+ * said. That is the worst possible failure for a parser, because it looks like
+ * the product is broken rather than like the input was.
+ *
+ * `(?!\d)` guards what the looser space then allows: without it "by Sep2026"
+ * would take "20" as the day and silently quote a date three weeks off. A
+ * refusal to parse is recoverable by asking; a confident wrong date is not.
+ */
+const DEADLINE_PATTERN = /\b(?:by|on)\s+([A-Za-z]+)\.?\s*(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/gi;
 
 /**
  * Parses a phrase like "by Dec 31" or "by December 31 2027" into an ISO date.

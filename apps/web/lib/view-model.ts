@@ -27,6 +27,8 @@ import { costLabel, coverageLabel, levelLabel, payoutLabel, shortfallLabel } fro
  */
 
 export interface PositionRowView {
+  /** The venue's own page for this bracket. Null when it published no slug. */
+  href: string | null;
   bracketLabel: string;
   /** The venue's own question, unedited. Empty when it published none. */
   question: string;
@@ -73,11 +75,17 @@ export interface CoverOptionView {
   name: string;
   reason: string;
   costLabel: string;
+  /** The premium as a number, for drawing. Labels are for reading, not maths. */
+  costUsd: number;
+  /** The full loss described, so a chart can show what is left of it. */
+  payoutUsd: number;
   coverageLabel: string;
   coverageRatio: number;
   paysLabel: string;
   shortfallLabel: string;
   shortfallWhere: string | null;
+  /** Worst target loss + premium - payout; optional for older stored views. */
+  netLossLabel?: string;
   beyondOwedLabel: string;
   /** Conservatism INSIDE a bracket. Non-zero for payoffs that vary within one. */
   withinBracketLabel: string;
@@ -100,8 +108,28 @@ export interface EventView {
   outcomeCount: number;
 }
 
+/**
+ * What the sentence was understood to mean, as separable facts.
+ *
+ * Shown back as editable chips. The point is error reduction WITHOUT a form:
+ * a dropdown of asset classes would have to enumerate what is supported, and
+ * the ladder parser is general — it reads families neither we nor the user
+ * would think to list, so enumerating would understate the product and freeze
+ * it at whatever was listed. Free text in, structure back: the user sees
+ * exactly what was read and corrects the one field that is wrong.
+ */
+export interface ParsedView {
+  subject: string;
+  settlesLabel: string;
+  /** What is being protected, e.g. "$8,000 below $77,000". */
+  exposureLabel: string;
+  /** Null when the user named no budget — never an invented one. */
+  budgetLabel: string | null;
+}
+
 export interface QuotedView {
   statement: string;
+  parsed: ParsedView;
   event: EventView;
   options: CoverOptionView[];
   assumptions: string[];
@@ -116,6 +144,7 @@ export interface QuotedView {
 function heldPositions(
   basket: Basket,
   questionFor: (marketId: string) => string,
+  linkFor: (marketId: string) => string | null = () => null,
 ): PositionRowView[] {
   // The solver returns a row for every leg it considered, most at zero shares.
   // Those are not positions, and listing them buries the ones that are.
@@ -123,6 +152,7 @@ function heldPositions(
   const total = held.reduce((sum, leg) => sum + leg.costCents, 0);
 
   return held.map((leg) => ({
+    href: linkFor(leg.marketId),
     bracketLabel: leg.label,
     question: questionFor(leg.marketId),
     side: leg.side,
@@ -167,22 +197,27 @@ export function toOptionView(
   record: QuoteRecord,
   unit: string,
   questionFor: (marketId: string) => string = () => '',
+  linkFor: (marketId: string) => string | null = () => null,
 ): CoverOptionView {
   const basket = record.basket;
   const residual = basket.residual;
   const payoutUsd = 'payoutUsd' in record.request.shape ? record.request.shape.payoutUsd : 0;
-  const positions = heldPositions(basket, questionFor);
+  const positions = heldPositions(basket, questionFor, linkFor);
 
   return {
     id,
     name,
     reason,
     costLabel: costLabel(basket.totalCostCents),
+    costUsd: Number(basket.totalCostCents) / 100,
+    payoutUsd,
     coverageLabel: coverageLabel(residual.coverageRatio),
     coverageRatio: residual.coverageRatio,
     paysLabel: payoutLabel(payoutUsd * residual.coverageRatio),
     shortfallLabel: shortfallLabel(Number(residual.worstStateShortfallCents)),
     shortfallWhere: residual.worstStateLabel,
+    netLossLabel: costLabel(Math.max(0, ...payoutRows(record, unit)
+      .map(row => (row.owedUsd - row.paidUsd) * 100 + basket.totalCostCents))),
     // Never "in states that owe nothing": this sums the excess over EVERY
     // state, including ones that do owe. The narrower phrasing understated it.
     beyondOwedLabel: costLabel(Number(residual.crossStateOverhedgeCents)),
@@ -229,8 +264,29 @@ export function toQuotedView(
   options: CoverOptionView[],
   assumptions: string[],
 ): QuotedView {
+  const shape = record.request.shape;
+  const unit = event.ladder.unit;
+  const payout = 'payoutUsd' in shape ? payoutLabel(shape.payoutUsd) : '';
+
   return {
-    statement: `${event.title} — ${describeShape(record, event.ladder.unit)}`,
+    statement: `${event.title} — ${describeShape(record, unit)}`,
+    parsed: {
+      subject: event.title,
+      settlesLabel: event.observationAt,
+      exposureLabel:
+        shape.templateId === 'range_protect'
+          ? `${payout} outside ${levelLabel(shape.low, unit)}–${levelLabel(shape.high, unit)}`
+          : shape.templateId === 'linear_strip'
+            ? `${payout} across ${levelLabel(shape.k1, unit)}–${levelLabel(shape.k2, unit)}`
+            : 'k' in shape
+              ? `${payout} ${shape.direction} ${levelLabel(shape.k, unit)}`
+              : payout,
+      // Absent, not zero. A budget the user never stated is never invented.
+      budgetLabel:
+        record.request.budgetUsd === undefined
+          ? null
+          : `$${record.request.budgetUsd.toLocaleString('en-US')}`,
+    },
     event: {
       title: event.title,
       settlesLabel: event.observationAt,

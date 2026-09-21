@@ -29,6 +29,8 @@ const STALE_AFTER_MS = 30_000;
 const DEBOUNCE_MS = 750;
 const MAX_CONCURRENT_SOLVES = 4;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+/** The venue drops a connection that goes quiet. */
+const PING_MS = 10_000;
 
 export interface Watcher {
   id: string;
@@ -108,6 +110,7 @@ export class MarketFeed {
   private lastMessageAt = Date.now();
   private staleTimer: ReturnType<typeof setInterval> | null = null;
   private resubscribe: { fire: () => void; cancel: () => void } | null = null;
+  private ping: ReturnType<typeof setInterval> | null = null;
   private announcedStale = false;
 
   constructor(private readonly connect: (url: string) => WebSocket = (url) => new WebSocket(url)) {}
@@ -148,6 +151,19 @@ export class MarketFeed {
       this.attempt = 0;
       this.lastMessageAt = Date.now();
       socket.send(JSON.stringify({ type: 'market', assets_ids: this.tokens() }));
+
+      // The venue closes a connection that says nothing. Without this the
+      // socket drops every few tens of seconds, and a basket watched over a
+      // lunch break would spend it reconnecting rather than listening.
+      if (this.ping !== null) clearInterval(this.ping);
+      this.ping = setInterval(() => {
+        if (this.socket !== socket) return;
+        try {
+          socket.send('PING');
+        } catch {
+          // A send on a dying socket; the close handler deals with it.
+        }
+      }, PING_MS);
     });
 
     socket.addEventListener('message', (event: MessageEvent) => {
@@ -159,8 +175,16 @@ export class MarketFeed {
       this.ingest(String(event.data));
     });
 
-    socket.addEventListener('close', () => this.retry());
-    socket.addEventListener('error', () => this.retry());
+    // Only if THIS is still the live socket. Replacing a socket calls close()
+    // on the old one, whose close event would otherwise be indistinguishable
+    // from the venue dropping us — and each phantom drop scheduled another
+    // reconnect, so one watcher produced a reconnect loop.
+    socket.addEventListener('close', () => {
+      if (this.socket === socket) this.retry();
+    });
+    socket.addEventListener('error', () => {
+      if (this.socket === socket) this.retry();
+    });
   }
 
   private retry(): void {
@@ -191,8 +215,13 @@ export class MarketFeed {
   }
 
   private close(): void {
+    if (this.ping !== null) {
+      clearInterval(this.ping);
+      this.ping = null;
+    }
     if (this.socket === null) return;
     const socket = this.socket;
+    // Cleared BEFORE close(), so the close event knows this was deliberate.
     this.socket = null;
     try {
       socket.close();

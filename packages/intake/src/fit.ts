@@ -144,10 +144,10 @@ const FIT_LEVELS: string[] = [
 ];
 
 const TEMPLATE_PAYOFFS: Record<PriceTemplateId, string> = {
-  threshold_digital: 'a fixed amount paid whenever the price ends past one level',
-  tail_only: 'a fixed amount paid only if the price ends far past one level, in the extreme case',
-  range_protect: 'a fixed amount paid whenever the price ends outside a two-sided range',
-  linear_strip: 'an amount that grows steadily as the price moves between two levels',
+  threshold_digital: 'a fixed amount paid whenever the observed value ends past one level',
+  tail_only: 'a fixed amount paid only if the observed value ends far past one level, in the extreme case',
+  range_protect: 'a fixed amount paid whenever the observed value ends outside a two-sided range',
+  linear_strip: 'an amount that grows steadily as the observed value moves between two levels',
 };
 
 const ROLE_WORDS: Record<NamedLevel['role'], string> = {
@@ -157,9 +157,9 @@ const ROLE_WORDS: Record<NamedLevel['role'], string> = {
 };
 
 function describeLevels(levels: NamedLevel[]): string {
-  if (levels.length === 0) return 'The user named no price levels.';
+  if (levels.length === 0) return 'The user named no numeric levels.';
   const parts = levels.map((level) => `${level.value} (${ROLE_WORDS[level.role]})`);
-  return `The price levels the user gave, with the role each plays: ${parts.join('; ')}.`;
+  return `The numeric levels the user gave, with the role each plays: ${parts.join('; ')}.`;
 }
 
 /**
@@ -367,13 +367,21 @@ export async function assessFit(
 
     // Code first: a ladder that cannot express the user's levels is out
     // regardless of what the model thought of it.
+    const unitsMatch = exposure.levels.every(level => {
+      const marketUnit = candidate.event.ladder.unit;
+      // A temperature without a unit is not safely comparable. No implicit
+      // Celsius/Fahrenheit or percent/basis-point conversion is performed.
+      if (marketUnit === '°C' || marketUnit === '°F') return level.unit === marketUnit;
+      return level.unit === undefined || level.unit === marketUnit;
+    });
+    if (!unitsMatch) ruleFlags.push('The stated levels and market brackets use different or unspecified units.');
     const covers = ladderCovers(exposure.levels, candidate.event.ladder.span);
     if (!covers.ok && covers.reason !== undefined) ruleFlags.push(covers.reason);
 
     return {
       eventId: candidate.event.eventId,
       fitScore: fitAnswer.score,
-      inScope: covers.ok && fitAnswer.score >= thresholds.minFitScore,
+      inScope: unitsMatch && covers.ok && fitAnswer.score >= thresholds.minFitScore,
       sourceMatch: sourceAnswer.probability,
       ruleFlags,
     };

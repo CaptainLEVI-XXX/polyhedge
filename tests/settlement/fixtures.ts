@@ -34,7 +34,7 @@ export async function basketFixture(id = 'basket'): Promise<SettlementBasket> {
   const event: GammaEvent = {
     id: 'event', slug: 'event', title: 'BTC', negRisk: true, negRiskMarketId: '0x1',
     endDate: '2026-10-01T16:00:00Z', tags: [], seriesTickers: [],
-    markets: ['a', 'b'].map((id, i) => ({ id, question: id, groupItemTitle: i ? '>100' : '<100', description: 'rules',
+    markets: ['a', 'b'].map((id, i) => ({ id, question: id, slug: null, groupItemTitle: i ? '>100' : '<100', description: 'rules',
       yesTokenId: `${id}YES`, noTokenId: `${id}NO`, yesPrice: i ? 0.8 : 0.2,
       tickSize: 0.01, feeRate: 0, endDate: '2026-10-01T16:00:00Z' })),
   };

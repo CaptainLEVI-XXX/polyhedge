@@ -99,3 +99,35 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     </PrivyProvider>
   );
 }
+
+/**
+ * Signing in, which proves identity and nothing else.
+ *
+ * Not "connect wallet": no funds move, nothing is provisioned and no approval
+ * is granted by this button. Naming it for what it does keeps the later steps —
+ * provisioning, approval, a pUSD balance — visible as the separate things they
+ * are.
+ */
+export function Connect() {
+  const session = useSession();
+
+  if (session.status === 'connecting') return <span className="tag">connecting</span>;
+
+  if (session.address === null) {
+    return (
+      <button onClick={session.login} style={{ padding: '8px 16px' }}>
+        Sign in
+      </button>
+    );
+  }
+
+  const short = `${session.address.slice(0, 6)}…${session.address.slice(-4)}`;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--s3)' }}>
+      <span className="tag">{short}</span>
+      <button onClick={session.logout} style={{ padding: '8px 14px' }}>
+        Sign out
+      </button>
+    </span>
+  );
+}

@@ -3,6 +3,7 @@ export * from './money.js';
 export * from './types.js';
 export * from './state-space.js';
 export * from './shapes.js';
+export * from './exposure.js';
 export * from './payoff-matrix.js';
 export * from './book.js';
 export * from './residual.js';

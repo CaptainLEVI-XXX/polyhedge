@@ -192,19 +192,55 @@ function shapedReason(
   record: QuoteRecord,
   residualVsPrimary: Residual,
 ): string {
-  const cost = `Costs ${usd(record.basket.totalCostCents)} instead of `
-    + `${usd(primary.basket.totalCostCents)}`;
+  const saved = primary.basket.totalCostCents - record.basket.totalCostCents;
+  // "Costs $600 instead of $600" is what the naive phrasing produced, and it
+  // reads as a bug because it is one. When the budget binds, both solves land
+  // on the cap and only the shape differs.
+  const cost = Math.abs(saved) < MATERIAL_CENTS
+    ? 'Costs the same'
+    : `Costs ${usd(record.basket.totalCostCents)} instead of ${usd(primary.basket.totalCostCents)}`;
+
   const avoided = primary.basket.residual.crossStateOverhedgeCents
     - residualVsPrimary.crossStateOverhedgeCents;
 
   // "beyond what your exposure owes", not "in states that owe nothing":
   // `crossStateOverhedgeCents` sums the excess over EVERY state, including
   // states that do owe something. The narrower phrasing understates it.
-  return avoided > 0
-    ? `${cost}, and buys ${usd(avoided)} less payout beyond what your exposure owes.`
-    : `${cost}, and does not reduce the `
-      + `${usd(primary.basket.residual.crossStateOverhedgeCents)} of payout bought `
-      + 'beyond what your exposure owes.';
+  return `${cost}, and buys ${usd(avoided)} less payout beyond what your exposure owes.`;
+}
+
+/**
+ * Below this, two baskets are the same basket.
+ *
+ * A stated policy, not a fitted number: a dollar is the smallest difference
+ * worth putting on screen as a distinct choice.
+ */
+const MATERIAL_CENTS = 100;
+
+/**
+ * Whether an alternative is worth offering at all.
+ *
+ * An alternative is a trade-off someone can act on. One that costs the same AND
+ * buys no less unwanted payout is not a trade-off, it is the primary basket
+ * again under another name — and shown as a card beside it, with identical
+ * numbers, it actively misleads: it implies a choice exists where none does.
+ *
+ * This was live. A budget-capped BTC hedge offered a fourth basket reading
+ * "Costs $600 instead of $600, and does not reduce the $8,059.40 of payout
+ * bought beyond what your exposure owes" — an option whose own description
+ * said it did nothing.
+ */
+function improvesOnPrimary(
+  primary: QuoteRecord,
+  record: QuoteRecord,
+  residualVsPrimary: Residual,
+): boolean {
+  const cheaper = primary.basket.totalCostCents - record.basket.totalCostCents;
+  // Measured against the PRIMARY's target, never the alternative's own — an
+  // alternative solves a weaker target and its own residual flatters it.
+  const lessOverhedge = primary.basket.residual.crossStateOverhedgeCents
+    - residualVsPrimary.crossStateOverhedgeCents;
+  return cheaper >= MATERIAL_CENTS || lessOverhedge >= MATERIAL_CENTS;
 }
 
 function cheaperTailReason(
@@ -274,12 +310,17 @@ export async function buildAlternatives(
       resolvedOptions,
     );
     const residualVsPrimary = remeasureAgainstPrimary(primary, record);
-    alternatives.push({
-      kind: 'shaped',
-      reason: shapedReason(primary, record, residualVsPrimary),
-      record,
-      residualVsPrimary,
-    });
+    // Offered only if it actually trades something away for something. When the
+    // budget binds, this solve lands on the same cap and changes nothing, and a
+    // duplicate card implies a choice that does not exist.
+    if (improvesOnPrimary(primary, record, residualVsPrimary)) {
+      alternatives.push({
+        kind: 'shaped',
+        reason: shapedReason(primary, record, residualVsPrimary),
+        record,
+        residualVsPrimary,
+      });
+    }
   }
 
   // The premium is a large share of what it protects. Offer the same payout

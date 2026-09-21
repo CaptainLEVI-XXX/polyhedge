@@ -1,6 +1,8 @@
 import type { NextConfig } from 'next';
 
 const config: NextConfig = {
+  // Separate output lets production checks run without disrupting the dev server.
+  distDir: process.env.POLYHEDGE_BUILD_DIR ?? '.next',
   /**
    * `highs` is a WASM LP solver. Bundling it inlines the `.wasm` and the solve
    * fails at request time with nothing useful in the stack — so it stays

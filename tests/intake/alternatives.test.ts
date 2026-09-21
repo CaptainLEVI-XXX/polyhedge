@@ -5,7 +5,7 @@ import { buildAlternatives } from '../../packages/intake/src/alternatives.js';
 
 const mkt = (id: string, title: string) => ({
   id, question: `q ${id}`, groupItemTitle: title, description: 'd',
-  yesTokenId: `${id}_yes`, noTokenId: `${id}_no`, yesPrice: 0.2,
+  slug: null, yesTokenId: `${id}_yes`, noTokenId: `${id}_no`, yesPrice: 0.2,
   tickSize: 0.01, feeRate: 0, endDate: '2026-12-31T16:00:00Z',
 });
 

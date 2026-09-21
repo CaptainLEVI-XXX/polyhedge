@@ -13,7 +13,7 @@ const mkt = (id: string, title: string) => ({
   question: `q ${id}`,
   groupItemTitle: title,
   description: 'Resolves off the Binance 1 minute candle close at 12:00 ET.',
-  yesTokenId: `${id}_yes`,
+  slug: null, yesTokenId: `${id}_yes`,
   noTokenId: `${id}_no`,
   yesPrice: 0.2,
   tickSize: 0.01,
@@ -160,6 +160,93 @@ function harness(answers: Record<string, Answer>, events: IndexedEvent[]): Harne
 }
 
 describe('intake', () => {
+  it('asks for missing levels before shape or fit calls and preserves a temperature clarification', async () => {
+    const h = harness({ ...commonAnswers(), role_0: choice('loss', 0.95),
+      role_1: choice('unrelated', 0.95), role_2: choice('threshold', 0.95) },
+      [{ ...indexed('2026-12-31T17:00:00Z'), title: 'Highest temperature in Chicago on December 31?', seriesTicker: 'chicago-temperature',
+        ladder: { ...BRACKET_LADDER, unit: '°F', span: { lo: 50, hi: 80 } } }]);
+    const first = await intake('I run Chicago events and lose $8000 if it is cold on Dec 31.', h.deps);
+    expect(first.kind).toBe('follow_up');
+    expect(h.engineCalls()).toBe(1);
+    if (first.kind !== 'follow_up') throw new Error('expected clarification');
+    expect(first.session.pending?.field).toBe('threshold');
+    // An explicit answer carries its unit into the deterministic assembly.
+    const assembled = assembleExposure('below 60°F by Dec 31', {
+      candidates: [], answers: commonAnswers(), modelVersion: 'test',
+    }, parseDeadline('by Dec 31', TODAY), 'temperature', 1, undefined,
+    [{ field: 'threshold', answer: '60°F' }, { field: 'lossUsd', answer: '8000' }]);
+    expect(assembled.kind).toBe('exposure');
+    if (assembled.kind === 'exposure') expect(assembled.exposure.levels).toEqual([{ value: 60, role: 'threshold', unit: '°F' }]);
+  });
+  it('clarifies conflicting loss amounts and uses the explicit numeric correction', async () => {
+    const text = 'I hold BTC and could lose $5,000 or $15,000 below 60k by Dec 31. My budget is $300.';
+    const h = harness({ ...commonAnswers(), role_0: choice('loss', 0.95),
+      role_1: choice('loss', 0.95), role_2: choice('threshold', 0.95),
+      role_3: choice('unrelated', 0.95), role_4: choice('budget', 0.95),
+      role_5: choice('loss', 0.95) }, [indexed('2026-12-31T17:00:00Z')]);
+    const first = await intake(text, h.deps);
+    expect(first.kind).toBe('follow_up');
+    if (first.kind !== 'follow_up') throw new Error('expected clarification');
+    const second = await intake('8000', h.deps, first.session);
+    expect(second.kind).toBe('quoted');
+    if (second.kind !== 'quoted') throw new Error('expected quote');
+    expect(second.record.request.shape.payoutUsd).toBe(8000);
+    expect(second.record.request.budgetUsd).toBe(300);
+  });
+
+  it('declines path-triggered cover before asking for a date and respects negated touch language', () => {
+    const extraction = { candidates: [], answers: { ...commonAnswers(),
+      settlementBasis: choice('path', 0.99) }, modelVersion: 'test' };
+    expect(assembleExposure('BTC must pay if it ever touches the barrier.', extraction,
+      null, 'BTC', 0).kind).toBe('declined');
+    const finalOnly = assembleExposure('A touch does not count; use only final BTC price by Dec 31.',
+      { ...extraction, answers: { ...extraction.answers, settlementBasis: choice('final', 0.99) } },
+      parseDeadline('by Dec 31', TODAY), 'BTC', 0);
+    expect(finalOnly.kind).toBe('follow_up');
+    if (finalOnly.kind !== 'follow_up') throw new Error('expected missing loss');
+    expect(finalOnly.field).toBe('lossUsd');
+  });
+
+  it('batches interpretation into one call while retaining the separate market-fit check', async () => {
+    const text = 'I hold BTC and lose $8,000 below 60k by Dec 31. My budget is $300.';
+    const answers = { ...commonAnswers(), role_0: choice('loss', 0.95),
+      role_1: choice('threshold', 0.95), role_2: choice('unrelated', 0.95), role_3: choice('budget', 0.95) };
+    const baseline = harness(answers, [indexed('2026-12-31T17:00:00Z')]);
+    const combined = harness(answers, [indexed('2026-12-31T17:00:00Z')]);
+    combined.deps.combinedShape = true;
+    const old = await intake(text, baseline.deps);
+    const next = await intake(text, combined.deps);
+    expect(old.kind).toBe('quoted');
+    expect(next.kind).toBe('quoted');
+    if (old.kind !== 'quoted' || next.kind !== 'quoted') throw new Error('expected quotes');
+    expect(next.record.request).toEqual(old.record.request);
+    expect(next.record.basket).toEqual(old.record.basket);
+    expect(baseline.engineCalls()).toBe(3);
+    expect(combined.engineCalls()).toBe(2);
+  });
+
+  it('falls back for uncertain or incompatible batched shapes and still asks for missing loss', async () => {
+    const text = 'I hold BTC and lose $8,000 below 60k by Dec 31. My budget is $300.';
+    const answers = { ...commonAnswers(), role_0: choice('loss', 0.95),
+      role_1: choice('threshold', 0.95), role_2: choice('unrelated', 0.95), role_3: choice('budget', 0.95) };
+    for (const shape of [choice('threshold_digital', 0.4), choice('range_protect', 0.99)]) {
+      const run = harness(answers, [indexed('2026-12-31T17:00:00Z')]);
+      run.deps.combinedShape = true;
+      const ask = run.deps.engine.ask;
+      run.deps.engine.ask = async (state, questions) => {
+        const result = await ask(state, questions);
+        return 'role_0' in questions ? { ...result, answers: { ...result.answers, priceTemplate: shape } } : result;
+      };
+      const result = await intake(text, run.deps);
+      expect(result.kind).toBe('quoted');
+      expect(run.engineCalls()).toBe(3);
+    }
+    const missing = harness({ ...answers, role_0: choice('unrelated', 0.95) }, [indexed('2026-12-31T17:00:00Z')]);
+    missing.deps.combinedShape = true;
+    const result = await intake(text, missing.deps);
+    expect(result.kind).toBe('follow_up');
+    expect(missing.engineCalls()).toBe(1);
+  });
   it('routes fixed fields after calibration and caps missing-field follow-ups', async () => {
     const result = assembleExposure('BTC by Dec 31', {
       answers: commonAnswers(), candidates: [], modelVersion: 'jev-test',

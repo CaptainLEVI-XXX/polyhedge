@@ -9,6 +9,7 @@
     "test": "vitest run",
     "typecheck": "tsc -b && tsc -p tests/tsconfig.json && tsc -p apps/web/tsconfig.json",
     "demo": "node --import tsx examples/simulated-lifecycle.ts",
+    "benchmark:hedge": "node --import tsx examples/hedge-benchmark.ts",
     "db:migrate": "node --import tsx examples/migrate.ts",
     "web": "pnpm --filter @polyhedge/web dev",
     "verify:solver": "node apps/web/scripts/verify-solver.mjs"

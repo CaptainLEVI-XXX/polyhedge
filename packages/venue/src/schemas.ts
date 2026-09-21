@@ -4,12 +4,15 @@ const levelSchema = z.object({ price: z.string(), size: z.string() });
 const bookSchema = z.object({
   market: z.string(), asset_id: z.string(), timestamp: z.string(), hash: z.string(),
   bids: z.array(levelSchema), asks: z.array(levelSchema),
+  min_order_size: z.union([z.number(), z.string().regex(/^\d+(?:\.\d+)?$/)])
+    .transform(Number).pipe(z.number().finite().nonnegative()).optional(),
 });
 
 export interface ParsedLevel { priceMicros: number; size: number }
 export interface ClobBook {
   market: string; assetId: string; timestamp: string; hash: string;
   bids: ParsedLevel[]; asks: ParsedLevel[];
+  minOrderSize?: number;
 }
 
 /** Tick size varies per market and can be 0.001, so cents are too coarse. */
@@ -25,11 +28,16 @@ export function parseBook(raw: unknown): ClobBook {
     market: b.market, assetId: b.asset_id, timestamp: b.timestamp, hash: b.hash,
     bids: b.bids.map(level).sort((x, y) => y.priceMicros - x.priceMicros),
     asks: b.asks.map(level).sort((x, y) => x.priceMicros - y.priceMicros),
+    ...(b.min_order_size === undefined ? {} : { minOrderSize: b.min_order_size }),
   };
 }
 
 const marketSchema = z.object({
   id: z.string(), question: z.string(), groupItemTitle: z.string(), description: z.string(),
+  // Optional because an abridged payload may omit it. Absent means we link to
+  // the event rather than the bracket — never a guessed slug, which would send
+  // someone to a 404 or, worse, to a different market.
+  slug: z.string().optional(),
   clobTokenIds: z.string(), outcomePrices: z.string(), outcomes: z.string(),
   orderPriceMinTickSize: z.number(), endDate: z.string(),
   feeSchedule: z.object({ rate: z.number(), takerOnly: z.boolean() }).optional(),
@@ -50,6 +58,8 @@ const eventSchema = z.object({
 
 export interface GammaMarket {
   id: string; question: string; groupItemTitle: string; description: string;
+  /** The venue's own path segment for this bracket. Null if it did not say. */
+  slug: string | null;
   yesTokenId: string; noTokenId: string; yesPrice: number;
   tickSize: number;
   /** null means the venue did not report one. Unknown, NOT zero. */
@@ -84,7 +94,7 @@ export function parseEvent(raw: unknown): GammaEvent {
       }
       return {
         id: m.id, question: m.question, groupItemTitle: m.groupItemTitle,
-        description: m.description,
+        description: m.description, slug: m.slug ?? null,
         yesTokenId: tokens[0] ?? '', noTokenId: tokens[1] ?? '',
         yesPrice: Number(prices[0] ?? '0'),
         tickSize: m.orderPriceMinTickSize,

@@ -4,7 +4,7 @@ import { type ClobBook, type GammaEvent } from '../../packages/venue/src/index.j
 
 const market = (id: string, title: string, tok: string, feeRate: number | null = 0.07) => ({
   id, question: `q ${id}`, groupItemTitle: title, description: 'd',
-  yesTokenId: tok, noTokenId: `${tok}_no`, yesPrice: 0.1,
+  slug: null, yesTokenId: tok, noTokenId: `${tok}_no`, yesPrice: 0.1,
   tickSize: 0.01, feeRate, endDate: '2026-12-31T16:00:00Z',
 });
 

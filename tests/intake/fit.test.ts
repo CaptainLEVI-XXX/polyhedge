@@ -72,6 +72,16 @@ function answersFor(count: number, edgeCaseRisk = 0.02): Record<string, Answer> 
 }
 
 describe('assessFit', () => {
+  it('rejects missing or incompatible temperature units even when the model approves', async () => {
+    const c = candidate(0);
+    c.event = indexed({ ladder: { ...LADDER, unit: '°F', span: { lo: -10, hi: 100 } } });
+    for (const unit of [undefined, '°C', '°F']) {
+      const exposure: TypedExposure = { ...EXPOSURE,
+        levels: [{ value: 60, role: 'threshold', ...(unit ? { unit } : {}) }] };
+      const result = await assessFit(exposure, 'threshold_digital', [c], createMockEngine(answersFor(1)));
+      expect(result.fits[0]?.inScope).toBe(unit === '°F');
+    }
+  });
   it('sends every candidate in a single engine.ask', async () => {
     const candidates = [candidate(0), candidate(1), candidate(2)];
 

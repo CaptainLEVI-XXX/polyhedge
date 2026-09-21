@@ -10,7 +10,7 @@ function market(extra: Partial<GammaMarket> = {}): GammaMarket {
   return {
     id: 'm1', question: 'Will BTC be less than $68,000?', groupItemTitle: '<68,000',
     description: NOON_ET_DESCRIPTION,
-    yesTokenId: 'tok_yes', noTokenId: 'tok_no', yesPrice: 0.5,
+    slug: null, yesTokenId: 'tok_yes', noTokenId: 'tok_no', yesPrice: 0.5,
     tickSize: 0.001, feeRate: null, endDate: '2026-09-26T16:00:00Z',
     ...extra,
   };
