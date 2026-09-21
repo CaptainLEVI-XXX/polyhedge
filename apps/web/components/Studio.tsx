@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { Ladder } from './Ladder';
+import { Allocation } from './Allocation';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
@@ -159,19 +160,7 @@ export function Studio() {
       )}
 
       {!busy && result?.kind === 'no_market_listed' && (
-        <div className="box">
-          <div className="body">
-            <h2 className="statement">
-              {result.furthestListed === null
-                ? 'Nothing is listed for this at all.'
-                : `Nothing settles that late. The furthest is ${result.furthestListed.slice(0, 10)}.`}
-            </h2>
-          </div>
-          <div className="note info">
-            Quoting the nearest listed date instead would cover a different date than the one you
-            asked about. That substitution is the thing this refuses to make quietly.
-          </div>
-        </div>
+        <NoMarket furthestListed={result.furthestListed} />
       )}
 
       {!busy && result?.kind === 'declined' && (
@@ -250,6 +239,13 @@ function Quoted({
       </div>
 
       <div className="box">
+        <header>Where the money goes</header>
+        <div className="body">
+          <Allocation ladder={option.ladder} />
+        </div>
+      </div>
+
+      <div className="box">
         <header>The honest account</header>
         <div className="body figs">
           <Fig n={option.costLabel} l="Cost" />
@@ -274,7 +270,7 @@ function Quoted({
           <table>
             <thead>
               <tr>
-                <th>Range</th>
+                <th>The question you are buying</th>
                 <th>Side</th>
                 <th className="num">Shares</th>
                 <th className="num">Price</th>
@@ -285,7 +281,12 @@ function Quoted({
             <tbody>
               {option.ladder.positions.map((p) => (
                 <tr key={p.tokenId}>
-                  <td>{p.bracketLabel}</td>
+                  <td>
+                    {p.question !== '' ? p.question : p.bracketLabel}
+                    {p.question !== '' && (
+                      <span style={{ color: 'var(--muted)' }}> · {p.bracketLabel}</span>
+                    )}
+                  </td>
                   <td><span className={`side ${p.side}`}>{p.side}</span></td>
                   <td className="num">{Math.round(p.shares).toLocaleString('en-US')}</td>
                   <td className="num">{p.priceLabel}</td>
@@ -335,6 +336,66 @@ function Quoted({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * A refusal is the product working, not an error — so it gets a screen rather
+ * than a red toast. For a distant date there is genuinely no instrument, and
+ * this is the most common answer the product gives, so it explains the shape
+ * of the problem rather than describing it.
+ */
+function NoMarket({ furthestListed }: { furthestListed: string | null }) {
+  if (furthestListed === null) {
+    return (
+      <div className="box">
+        <div className="body">
+          <h2 className="statement">Nothing is listed for this at all.</h2>
+          <p style={{ color: 'var(--ink-2)', marginBottom: 0 }}>
+            No market we can read settles on this subject right now.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const furthest = new Date(furthestListed);
+  const today = new Date();
+  const days = Math.max(0, Math.round((furthest.getTime() - today.getTime()) / 86_400_000));
+  const listedWidth = 14;
+
+  return (
+    <div className="box">
+      <div className="body">
+        <h2 className="statement">
+          Nothing settles that late. The furthest is {furthestListed.slice(0, 10)}.
+        </h2>
+        <p style={{ color: 'var(--ink-2)', maxWidth: 760 }}>
+          These markets list on a rolling window, so a later date is a matter of waiting rather
+          than of looking harder.
+        </p>
+
+        <svg viewBox="0 0 1140 86" width="100%" role="img"
+          aria-label={`Markets are listed up to ${furthestListed.slice(0, 10)}. The date you asked for is about ${days} days beyond that.`}>
+          <line x1="10" y1="48" x2="1130" y2="48" stroke="var(--ink)" />
+          <rect x="10" y="32" width={listedWidth * 10} height="32" fill="var(--covered)" stroke="var(--ink)" />
+          <text x={10 + listedWidth * 5} y="24" textAnchor="middle" style={{ font: '500 11px var(--mono)', fill: 'var(--ink)' }}>listed</text>
+          <text x={10 + listedWidth * 5} y="53" textAnchor="middle" style={{ font: '400 10px var(--mono)', fill: 'var(--ink)' }}>
+            to {furthestListed.slice(5, 10)}
+          </text>
+          <line x1="1060" y1="26" x2="1060" y2="70" stroke="var(--short)" strokeWidth="2" />
+          <text x="1060" y="18" textAnchor="middle" style={{ font: '500 11px var(--mono)', fill: 'var(--short-ink)' }}>you asked for</text>
+          <text x="580" y="44" textAnchor="middle" style={{ font: '400 10.5px var(--mono)', fill: 'var(--faint)' }}>
+            nothing trades in here
+          </text>
+        </svg>
+      </div>
+
+      <div className="note info">
+        Quoting the nearest listed date instead would cover a different date than the one you asked
+        about. That substitution is the thing this refuses to make quietly.
+      </div>
+    </div>
   );
 }
 

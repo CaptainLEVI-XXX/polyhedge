@@ -86,6 +86,11 @@ export async function POST(request: Request) {
     }
 
     const unit = event.ladder.unit;
+    // The venue's own wording for each outcome, so a position is shown as the
+    // question it actually is rather than as a bracket label we invented.
+    const gamma = index.byId.get(event.eventId);
+    const questionFor = (marketId: string): string =>
+      gamma?.markets.find((m) => m.id === marketId)?.question ?? '';
 
     // The stops. Solved together against one pinned snapshot so the three
     // prices are the same moment and can honestly be read side by side.
@@ -98,10 +103,10 @@ export async function POST(request: Request) {
         ...stops.map((stop, i) =>
           // Same shape at different budgets, so each record's own coverage is
           // already measured against the real loss.
-          toOptionView(`stop-${i}`, stop.name, stop.reason, stop.record, unit),
+          toOptionView(`stop-${i}`, stop.name, stop.reason, stop.record, unit, questionFor),
         ),
         ...result.alternatives.map((alt) =>
-          toOptionView(alt.kind, alt.kind.replace(/_/g, ' '), alt.reason, alt.record, unit),
+          toOptionView(alt.kind, alt.kind.replace(/_/g, ' '), alt.reason, alt.record, unit, questionFor),
         ),
       ],
       result.assumptions,

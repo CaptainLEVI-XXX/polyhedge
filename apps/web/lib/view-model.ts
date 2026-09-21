@@ -28,6 +28,8 @@ import { costLabel, coverageLabel, levelLabel, payoutLabel, shortfallLabel } fro
 
 export interface PositionRowView {
   bracketLabel: string;
+  /** The venue's own question, unedited. Empty when it published none. */
+  question: string;
   side: 'YES' | 'NO';
   shares: number;
   priceLabel: string;
@@ -49,6 +51,16 @@ export interface PayoutRowView {
 
 export interface LadderView {
   positions: PositionRowView[];
+  /**
+   * How many of these can pay at once — DERIVED, never fixed copy.
+   *
+   * For an all-YES basket over a partition exactly one can pay, and saying so
+   * explains why a small premium buys a large payout. But the solver also buys
+   * the neg-risk complement, and a NO position pays whenever its range is NOT
+   * the outcome, so several can pay together. Hardcoding the YES-only sentence
+   * would be a false promise on a basket the engine legitimately produces.
+   */
+  exclusivity: 'exactly_one' | 'several';
   payout: PayoutRowView[];
   thresholds: number[];
   unit: string;
@@ -101,7 +113,10 @@ export interface QuotedView {
   };
 }
 
-function heldPositions(basket: Basket, unit: string): PositionRowView[] {
+function heldPositions(
+  basket: Basket,
+  questionFor: (marketId: string) => string,
+): PositionRowView[] {
   // The solver returns a row for every leg it considered, most at zero shares.
   // Those are not positions, and listing them buries the ones that are.
   const held = basket.legs.filter((leg) => leg.shares > 0);
@@ -109,6 +124,7 @@ function heldPositions(basket: Basket, unit: string): PositionRowView[] {
 
   return held.map((leg) => ({
     bracketLabel: leg.label,
+    question: questionFor(leg.marketId),
     side: leg.side,
     shares: leg.shares,
     priceLabel: `${(leg.avgPriceMicros / 10_000).toFixed(1)}¢`,
@@ -150,11 +166,12 @@ export function toOptionView(
   reason: string,
   record: QuoteRecord,
   unit: string,
+  questionFor: (marketId: string) => string = () => '',
 ): CoverOptionView {
   const basket = record.basket;
   const residual = basket.residual;
   const payoutUsd = 'payoutUsd' in record.request.shape ? record.request.shape.payoutUsd : 0;
-  const positions = heldPositions(basket, unit);
+  const positions = heldPositions(basket, questionFor);
 
   return {
     id,
@@ -172,6 +189,7 @@ export function toOptionView(
     withinBracketLabel: costLabel(Number(residual.overhedgeCents)),
     ladder: {
       positions,
+      exclusivity: positions.every((p) => p.side === 'YES') ? 'exactly_one' : 'several',
       payout: payoutRows(record, unit),
       thresholds: levelsOf(record.request.shape),
       unit,
