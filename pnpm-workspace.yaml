@@ -1,7 +1,6 @@
 packages:
   - 'packages/*'
   - 'apps/*'
-  - 'studio'
 
 # esbuild ships a platform binary via a postinstall script. Approving it here stops
 # pnpm regenerating an `allowBuilds` placeholder in this file on every run, which was

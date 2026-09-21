@@ -5,6 +5,8 @@ import { Ladder } from './Ladder';
 import { Allocation } from './Allocation';
 import { readiness } from '@/lib/wallet-readiness';
 import { useSession } from './Session';
+import { Sparkline } from './Sparkline';
+import { RawData } from './RawData';
 import type { CoverOptionView, QuotedView } from '@/lib/view-model';
 
 type Result =
@@ -184,10 +186,12 @@ export function Studio() {
       )}
 
       <p className="foot">
-        <span>Not investment advice.</span>
-        <span>Every position can expire worthless.</span>
+        <span>
+          <strong>Not investment advice.</strong> This describes instruments and prices; it does
+          not recommend them.
+        </span>
         <span className="spacer" />
-        <span>Prices move within seconds.</span>
+        <span>Every position can expire worthless. Prices move within seconds.</span>
       </p>
     </div>
   );
@@ -300,6 +304,7 @@ function Quoted({
                 <th className="num">Price</th>
                 <th className="num">Cost</th>
                 <th className="num">Share of premium</th>
+                <th className="num">7d</th>
               </tr>
             </thead>
             <tbody>
@@ -316,6 +321,7 @@ function Quoted({
                   <td className="num">{p.priceLabel}</td>
                   <td className="num">{p.costLabel}</td>
                   <td className="num">{(p.premiumShare * 100).toFixed(1)}%</td>
+                  <td className="num"><Sparkline tokenId={p.tokenId} /></td>
                 </tr>
               ))}
             </tbody>
@@ -359,6 +365,8 @@ function Quoted({
           )}
         </div>
       </div>
+
+      <RawData option={option} view={view} />
     </>
   );
 }
