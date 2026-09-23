@@ -35,19 +35,10 @@ export function exposureSummary(text:string):string {
   return first.split(/\b(?:if|when|by)\b/i)[0]!.replace(/\s+(?:and\s+)?(?:I\s+)?(?:would\s+)?lose\b.*$/i,'').trim() || clean;
 }
 
-const COIN=String.raw`(btc|bitcoin|eth|ether|ethereum|sol|solana|xrp|doge|dogecoin)`;
-const NUMBER=String.raw`(\d+(?:\.\d+)?)`;
-/** "I hold 2 BTC", "own 0.5 ETH", "10 SOL holdings": how much of which coin is held. */
-export function heldCoins(text:string):{quantity:number;coin:string}|null {
-  const m=new RegExp(`\\b(?:hold(?:ing)?|own|have|long|short)\\s+${NUMBER}\\s*${COIN}\\b|\\b${NUMBER}\\s*${COIN}\\s+holdings?\\b`,'i').exec(text);
-  if(!m)return null;
-  const quantity=Number(m[1]??m[3]);
-  return quantity>0?{quantity,coin:(m[2]??m[4])!}:null;
-}
 /**
  * A coin holding loses gradually: $quantity for every $1 the price moves, reaching
- * `lossUsd` at `k`. So "2 BTC, lose $8,000 below $77,000" is a loss that starts at
- * $81,000 and grows to $8,000 at $77,000, not $8,000 the moment price crosses $77,000.
+ * `lossUsd` at `k`. The caller must first confirm that `k` is the end of the ramp;
+ * ambiguous language is not sufficient evidence for this interpretation.
  */
 export function holdingLoss(held:{quantity:number;coin:string},direction:'below'|'above',k:number,lossUsd:number):{shape:TargetShape;trigger:string} {
   const span=lossUsd/held.quantity;

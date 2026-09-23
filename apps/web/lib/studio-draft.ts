@@ -7,6 +7,7 @@ import type { BriefField, StudioReply, StudioChoice } from './studio-types.js';
 export interface StudioDraft {
   version: 1; expires: number; description: string; fields: BriefField[];
   request?: QuoteRequest; options?: QuoteOptions; assumptions: string[];
+  holdingInterpretation?: { candidates: { quantity:number; coin:string }[]; selected?: { quantity:number; coin:string } };
   numeric?: IntakeSession; known?: Partial<TypedExposure>;
   event?: { id: string; selection: EventSelection; support: EventSupport };
   matches?: { id: string; title: string; selection: EventSelection }[];
