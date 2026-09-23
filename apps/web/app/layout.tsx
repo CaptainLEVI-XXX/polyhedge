@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata = {
-  title: 'PolyHedge',
+  title: 'polyhedge: Hedge on Polymarket',
   description: 'Describe what you would lose. See what it costs to cover.',
 };
 

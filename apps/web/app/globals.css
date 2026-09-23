@@ -43,6 +43,7 @@
   --short: #c22d3a;
   --short-ink: #a3242f;
   --short-bg: #fcecec;
+  --warn-ink: #7d5518;
 
   --action: #2f5cf5;
   --action-soft: #eff3ff;
@@ -78,7 +79,7 @@ html, body {
 }
 
 /* Figures only. Applied to anything a user reads as a quantity. */
-.num, .mono, td.num, th.num, .stop-cost, .fig .n, .amount {
+.num, td.num, th.num, .fig .n {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
@@ -107,13 +108,16 @@ button:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
 
 button.primary { background: var(--action); border-color: var(--action); color: #fff; font-weight: 500; }
 button.primary:hover:not(:disabled) { background: var(--action-deep); border-color: var(--action-deep); }
-button.quiet { border-color: transparent; color: var(--muted); padding-left: 0; }
-button.quiet:hover:not(:disabled) { border-color: transparent; color: var(--ink); }
+/* `button:disabled` resets colour and border but not background, so a disabled
+   primary kept its full blue and read as the live action — the loudest thing
+   on screen was the one that did nothing. */
+button.primary:disabled { background: var(--paper); border-color: var(--rule-strong); color: var(--muted); }
 
 .wrap { max-width: 1100px; margin: 0 auto; padding: var(--s6) var(--s5) var(--s8); }
 
 .bar { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s7); }
-.brand { font-family: var(--serif); font-size: 26px; line-height: 1; letter-spacing: -0.01em; }
+/* Lowercase: the product states a cost, it does not announce itself. */
+.brand { font-family: var(--serif); font-size: 26px; line-height: 1; letter-spacing: -0.015em; }
 .tag { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
 .spacer { flex-grow: 1; }
 
@@ -152,7 +156,6 @@ button.quiet:hover:not(:disabled) { border-color: transparent; color: var(--ink)
   max-width: 24ch;
 }
 .lede { color: var(--ink-2); margin: var(--s3) 0 0; max-width: 62ch; }
-.quoted-words { color: var(--ink-2); margin: 0 0 var(--s4); line-height: 1.65; }
 
 .turn { padding: var(--s3) 0; display: flex; gap: var(--s3); align-items: flex-start; }
 .turn + .turn { border-top: 1px solid var(--rule); }
@@ -161,7 +164,6 @@ button.quiet:hover:not(:disabled) { border-color: transparent; color: var(--ink)
   letter-spacing: 0.08em; text-transform: uppercase; padding-top: 5px;
 }
 .turn .msg { flex: 1; min-width: 0; }
-.turn .why { display: block; color: var(--muted); font-size: 13px; margin-top: var(--s1); }
 
 .composer { display: flex; align-items: stretch; border: 1px solid var(--rule-strong); background: var(--paper); }
 .composer:focus-within { border-color: var(--ink); }
@@ -186,11 +188,11 @@ button.quiet:hover:not(:disabled) { border-color: transparent; color: var(--ink)
    what it does NOT cover. The shortfall is never behind a click — hiding it is
    the precise failure this product is built to avoid. Everything else lives in
    the detail view. */
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--s4); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: var(--s4); }
 .card {
-  display: block; width: 100%; text-align: left;
+  display: flex; flex-direction: column; width: 100%; min-width: 0; text-align: left;
   border: 1px solid var(--rule);
-  padding: var(--s5);
+  padding: 20px;
   background: var(--paper);
   transition: border-color 120ms ease;
 }
@@ -201,14 +203,16 @@ button.quiet:hover:not(:disabled) { border-color: transparent; color: var(--ink)
 }
 .card-cost {
   font-family: var(--mono); font-variant-numeric: tabular-nums;
-  font-size: 30px; letter-spacing: -0.03em; margin: var(--s3) 0 0; line-height: 1.1;
+  font-size: 30px; letter-spacing: -0.03em; margin: 12px 0 20px; line-height: 1.1;
 }
-.card-reason { color: var(--muted); font-size: 13px; margin: var(--s2) 0 var(--s5); min-height: 42px; }
+.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
+.card-heading .budget-flag { margin: 0; white-space: nowrap; padding: 2px 7px; background: var(--short-bg); }
 .card-line { display: flex; align-items: baseline; gap: var(--s2); font-size: 13px; padding: var(--s2) 0; }
 .card-line + .card-line { border-top: 1px solid var(--rule); }
 .card-line .k { color: var(--muted); flex: 1; }
 .card-line .v { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .card-line .v.short { color: var(--short-ink); }
+.card-line .v.warn { color: #7d5518; }
 .card-line .v.covered { color: var(--covered-ink); }
 .card-go {
   margin-top: var(--s4); font-size: 12px; color: var(--action);
@@ -242,7 +246,6 @@ th.num, td.num { text-align: right; padding-right: 0; }
 .side.YES { color: var(--covered-ink); }
 .side.NO { color: var(--action); }
 
-.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--s5); }
 .fig .n { font-size: 26px; letter-spacing: -0.03em; line-height: 1.1; }
 .fig .l {
   font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
@@ -253,13 +256,8 @@ th.num, td.num { text-align: right; padding-right: 0; }
 
 .note { padding: var(--s3) var(--s4); font-size: 13.5px; line-height: 1.6; }
 .note.warn { background: #fdf7ec; color: #7d5518; }
-.note.info { background: var(--action-soft); color: #22346b; }
-.note.stop { background: var(--short-bg); color: var(--short-ink); }
 .note + .note { border-top: 1px solid var(--rule); }
 
-ul.plain { margin: 0; padding-left: var(--s4); }
-ul.plain li { margin-bottom: var(--s2); color: var(--ink-2); }
-ul.plain li:last-child { margin-bottom: 0; }
 
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .chip {
@@ -267,19 +265,10 @@ ul.plain li:last-child { margin-bottom: 0; }
   color: var(--muted); background: var(--paper);
 }
 .chip b { color: var(--ink); font-weight: 500; font-family: var(--mono); font-size: 11.5px; }
-.chip.flag { background: #fdf7ec; border-color: #eedfc2; color: #7d5518; }
 
 /* An editable chip: what the parse understood, correctable in one click.
    Free text in, structure back — the user sees exactly what was read. */
-.chip.edit { cursor: pointer; }
-.chip.edit:hover { border-color: var(--ink); color: var(--ink); }
-.chip.edit .k { text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
 
-.foot {
-  border-top: 1px solid var(--rule); margin-top: var(--s8); padding-top: var(--s4);
-  display: flex; gap: var(--s5); font-size: 12px; color: var(--faint); flex-wrap: wrap;
-}
-.empty { color: var(--muted); }
 
 .spin {
   display: inline-block; width: 10px; height: 10px;
@@ -292,20 +281,8 @@ ul.plain li:last-child { margin-bottom: 0; }
   * { transition: none !important; }
 }
 
-@media (max-width: 1023px) { .narrow-warning { display: block; } }
-.narrow-warning { display: none; }
 
-/* ── Disclosure, legend, external links ─────────────────────────────────── */
-.disclose {
-  border: none; background: none; padding: 0; font: inherit; color: inherit;
-  letter-spacing: inherit; text-transform: inherit; display: inline-flex;
-  align-items: baseline; gap: var(--s2); cursor: pointer;
-}
-.disclose:hover:not(:disabled) { border-color: transparent; color: var(--ink); }
-.disclose .caret {
-  font-family: var(--mono); color: var(--faint); width: 10px; display: inline-block;
-}
-
+/* ── Chart legend and external links ─────────────────────────────────── */
 .legend {
   display: flex; flex-wrap: wrap; gap: var(--s5); margin-top: var(--s3);
   font-size: 12px; color: var(--muted);
@@ -322,15 +299,237 @@ a.venue {
   color: var(--ink); border-bottom: 1px solid var(--rule-strong);
 }
 a.venue:hover { color: var(--action); border-bottom-color: var(--action); }
-a.venue .out { color: var(--faint); font-size: 10px; margin-left: 4px; }
-a.venue:hover .out { color: var(--action); }
 
-.structured-builder { margin: 24px 0; }
-.event-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin: 16px 0; }
-.event-filters label { display: flex; flex-direction: column; gap: 6px; }
-.event-filters input, .event-filters select { width: 100%; padding: 10px; border: 1px solid #ccc; background: white; color: #222; font: inherit; }
-.event-results { display: grid; gap: 8px; max-height: 430px; overflow: auto; }
-.event-results button { text-align: left; padding: 14px; border: 1px solid #ddd; background: white; color: inherit; }
-.event-results button span { display: block; margin-top: 4px; }
-.structured-builder fieldset { border: 1px solid #ddd; padding: 20px; }
-@media(max-width:700px) { .event-filters { grid-template-columns: 1fr; } .structured-builder fieldset { padding: 12px; } }
+/* Exposure studio */
+.logo-mark { width: 30px; height: 30px; flex-shrink: 0; }
+.studio { max-width: 1800px; padding: 24px clamp(20px, 4vw, 64px) 32px; }
+.studio .bar { gap: 14px; margin-bottom: 28px; }
+.studio-intro { max-width: 880px; margin: 48px 0 36px; }
+.eyebrow { display: block; color: var(--muted); font-size: 12px; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 14px; }
+.studio .composer { margin-top: 24px; align-items: stretch; }
+.studio .composer textarea { min-height: 144px; font-size: 20px; padding: 24px; line-height: 1.5; resize: vertical; }
+.studio .composer button { min-width: 160px; }
+.brief { margin: 36px 0; border-top: 1px solid var(--rule); padding-top: 24px; }
+.brief-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
+.brief-field { padding: 20px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); min-width: 0; }
+.brief-field label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+.brief-field > button { border: 0; padding: 0; text-align: left; width: 100%; background: transparent; }
+.brief-field strong { display: block; font-size: 17px; font-weight: 500; overflow-wrap: anywhere; }
+.field-status { display: block; margin-top: 10px; font-size: 12px; color: var(--action); }
+.field-status.missing, .field-status.inferred { color: var(--short-ink); }
+.brief-field input { width: 100%; padding: 10px; margin-bottom: 8px; }
+.brief-field form button { padding: 7px 12px; margin-right: 6px; }
+.conversation { max-height: 380px; overflow-y: auto; margin-top: 24px; }
+.conversation .logo-mark { width: 24px; height: 24px; }
+.example-list { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 28px; }
+.example-list > .eyebrow, .example-list > .note { width: 100%; margin: 0; }
+.example-list button { padding: 7px 13px; font-size: 13px; }
+.build-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 0; margin-top: 24px; border-top: 1px solid var(--rule); }
+.build-row p { color: var(--muted); max-width: 58ch; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+@media(max-width: 720px) { .brief-grid { grid-template-columns: 1fr; } .studio .composer, .build-row { flex-direction: column; } .studio .composer button { padding: 18px; } .studio-intro { margin-top: 24px; } }
+.brief-strip, .comparison-controls { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 16px 0; }
+.brief-strip { border-block: 1px solid var(--rule); padding: 12px 0; margin-top: 20px; }
+.brief-summary { min-width: 0; }
+.brief-summary strong { display: block; font-weight: 500; }
+.brief-summary > span { display: block; color: var(--muted); font-size: 13px; }
+.brief-strip > button { flex-shrink: 0; }
+.comparison-controls { font-size: 12px; color: var(--muted); }
+.comparison-controls > div { display: flex; }
+.comparison-caption { margin: 12px 0 0; font-size: 12px; color: var(--muted); }
+.comparison-controls button { padding: 8px 14px; }
+.comparison-controls button[aria-pressed=true] { background: var(--action); color: white; border-color: var(--action); }
+.scroll-x { overflow-x: auto; }
+@media(max-width:720px) { .brief-strip,.comparison-controls { align-items: flex-start; flex-direction: column; } }
+.budget-flag { display: block; color: var(--short-ink); font-size: 12px; margin: 8px 0; }
+.sign-in-control { position: relative; }
+.bar .sign-in-control button.primary { background:transparent; border-color:var(--rule-strong);
+  color:var(--ink); font-weight:400; }
+.bar .sign-in-control button.primary:hover:not(:disabled) { background:transparent; border-color:var(--ink); color:var(--ink); }
+.sign-in-control [role=alert] { position: absolute; right: 0; top: 100%; width: 250px; z-index: 2; background: white; padding: 12px; }
+/* ── The hedge, in full ──────────────────────────────────────────────────
+   One thing is loud. The cost is what the page is about, so it is twice the
+   size of anything near it and everything else steps down a level — evenness
+   is not hierarchy, it is the absence of one. */
+.detail-navigation { display:flex; justify-content:space-between; align-items:center; gap:24px; }
+.detail-navigation .back { margin:0; }
+.basket-detail .statement { font-size:clamp(30px,3.4vw,40px); margin:18px 0 0; }
+.settles-on { color:var(--muted); font-size:13.5px; margin:8px 0 0; max-width:72ch; }
+.settles-on strong { color:var(--ink); font-weight:500; }
+
+.feed-controls { display:inline-flex; align-items:center; gap:14px; flex-wrap:wrap; }
+
+.live-figures { display:flex; flex-wrap:wrap; gap:20px 56px; align-items:flex-end;
+  border-block:1px solid var(--rule); padding:20px 0; margin-top:22px; }
+.live-figures .fig .n { font-family:var(--mono); font-variant-numeric:tabular-nums;
+  letter-spacing:-.03em; font-size:27px; line-height:1.05; }
+.live-figures .fig .l { font-size:11px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--muted); margin-top:7px; }
+.live-figures .fig.lead .n { font-size:clamp(38px,4.4vw,52px); }
+.live-figures .fig.bad .n { color:var(--short-ink); }
+.live-figures .fig.over .n { color:var(--warn-ink); }
+
+.detail-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(268px,30%); gap:40px; margin:26px 0 0; align-items:start; }
+/* Both columns speak the same language: same header, same rule, same rhythm. */
+.detail-panel h3, .cost-curve h3 { font-size:11px; font-weight:500; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--muted); margin:0 0 16px; display:flex;
+  align-items:baseline; gap:10px; flex-wrap:wrap; }
+.detail-panel h3 .aside, .cost-curve h3 .aside { text-transform:none; letter-spacing:0; color:var(--faint); }
+.detail-panel { border-top:1px solid var(--rule-strong); padding-top:16px; }
+.cost-curve { border-top:1px solid var(--rule-strong); padding-top:16px; margin-top:32px; }
+.detail-caption { color:var(--muted); font-size:12px; line-height:1.5; margin:10px 0 0; }
+
+.plot { position:relative; }
+.plot svg { display:block; width:100%; }
+.plot-read { position:absolute; transform:translate(-50%,calc(-100% - 10px)); background:var(--ink);
+  color:var(--paper); padding:8px 12px; font-size:11.5px; line-height:1.55; min-width:170px;
+  pointer-events:none; z-index:2; }
+.plot-read .t { display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--faint); margin-bottom:3px; }
+.plot-read .r { display:flex; justify-content:space-between; gap:16px; }
+.plot-read .r b { font-family:var(--mono); font-variant-numeric:tabular-nums; font-weight:400; }
+.plot-read .r.keep { border-top:1px solid #3b3830; margin-top:3px; padding-top:3px; }
+.legend-hint { color:var(--faint); }
+
+/* ── What you would buy ────────────────────────────────────────────────────
+   A contained panel, not loose text beside a chart. It was floating on the
+   page ground with no surface, which is why it read as unfinished next to the
+   plot. The total and the action are stuck to the bottom so they never scroll
+   away from the list they describe. */
+.positions-panel { display:flex; flex-direction:column; background:var(--panel);
+  border:1px solid var(--rule); padding:18px; max-height:clamp(340px,58dvh,560px); }
+.positions-head { flex:none; }
+.positions-panel h3 { margin:0; }
+.positions-why { margin:8px 0 0; font-size:11.5px; color:var(--covered-ink); }
+.positions-list { flex:1; min-height:0; overflow-y:auto; scrollbar-gutter:stable;
+  margin-top:14px; border-top:1px solid var(--rule); }
+
+.position-row { position:relative; padding:11px 0; border-bottom:1px solid var(--rule); font-size:13px; }
+.position-row:last-child { border-bottom:0; }
+.position-top { display:flex; align-items:baseline; gap:8px; }
+.position-top > :first-child { flex:1; min-width:0; }
+.position-numbers { display:flex; align-items:baseline; gap:10px; margin-top:5px;
+  font-size:11.5px; color:var(--muted); }
+.position-numbers strong { color:var(--ink); font-weight:500; }
+
+/* Each figure flashes on its own. Eight prices moving at their own cadence is
+   what reads as an order book; one aggregate number blinking never will. */
+.position-numbers .num { transition:background 600ms ease; padding-inline:3px; margin-inline:-3px; }
+.position-numbers .num.moved { background:var(--rule); }
+
+/* A leg the solver has just started buying, rather than a row appearing from
+   nowhere while you are reading. */
+.position-row.is-new { background:var(--covered); box-shadow:-8px 0 0 var(--covered), 8px 0 0 var(--covered); }
+.position-new { position:absolute; top:11px; right:0; font-size:9px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--covered-ink); }
+
+
+.positions-foot { flex:none; border-top:1px solid var(--rule-strong); padding-top:12px; margin-top:12px; }
+.positions-total { display:flex; align-items:baseline; justify-content:space-between;
+  font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
+.positions-total strong { font-size:17px; letter-spacing:-.02em; color:var(--ink); text-transform:none; }
+/* Not a primary: execution is not live, so it must not look like the action. */
+.buy-cover { width:100%; margin-top:12px; padding:13px 16px; font-weight:500; }
+
+@media(max-width:850px) {
+  .detail-columns { grid-template-columns:1fr; gap:28px; }
+  .detail-navigation { align-items:flex-start; flex-direction:column; gap:12px; }
+  .live-figures { gap:18px 32px; }
+}
+
+@media(max-width:720px) { .studio { padding:20px 20px 28px; } .studio .bar { margin-bottom:24px; } .comparison-controls { flex-direction:row; align-items:center; } .brief-strip { flex-direction:row; align-items:center; } .card { padding:18px; } }
+
+/* Shared pointer and keyboard affordances for selectable controls. */
+.studio button:not(:disabled):is(:hover, :focus-visible) { background: var(--action); border-color: var(--action); color: white; }
+.studio .bar .sign-in-control button.primary:not(:disabled):is(:hover, :focus-visible) { background: var(--action); border-color: var(--action); color: white; }
+.studio .brief-field > button:not(:disabled):is(:hover, :focus-visible) { background: transparent; color: var(--action); }
+.studio .brief-field:has(> button:not(:disabled):is(:hover, :focus-visible)) { background: #eef2ff; }
+.studio .brief-field > button:is(:hover, :focus-visible) .field-status { color: var(--action); }
+.field-suggestions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.field-suggestions small { flex-basis:100%; color:var(--muted); }
+.field-suggestions button { padding:8px 12px; font-size:14px; }
+.guided-examples { margin:24px 0; padding:20px; background:#f5f7ff; border:1px solid var(--rule); }
+.guided-examples p { margin:0 0 12px; }
+.guided-examples small { display:block; margin-top:12px; color:var(--muted); }
+.studio .card:not(:disabled):is(:hover, :focus-visible) { background:#eef2ff; color:var(--ink); }
+
+.product-footer { margin-top:48px; padding:24px 0; border-top:1px solid var(--rule); font-size:14px; }
+.footer-actions { display:flex; align-items:center; flex-wrap:wrap; gap:16px; }
+.github-link { margin-left:auto; display:flex; padding:10px; }
+.comparison-live { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:14px; color:var(--muted); margin-bottom:12px; }
+
+.live-times { font-size:12px; color:var(--muted); }
+.feed-controls,.comparison-live { flex-wrap:wrap; }
+
+.footer-actions { display:flex; flex-wrap:nowrap; align-items:center; justify-content:space-between; gap:24px; }
+.footer-support { display:flex; align-items:center; gap:10px; min-width:0; white-space:nowrap; }
+.footer-support code { color:var(--muted); font-size:13px; }
+.footer-support button { padding:6px 10px; font-size:13px; }
+.github-link { margin-left:0; display:inline-flex; align-items:center; gap:8px; text-decoration:none; }
+.footer-message:empty { display:none; }
+.footer-message { overflow-wrap:anywhere; }
+.live-badge { display:inline-flex; align-items:center; gap:9px; padding:7px 11px; border:1px solid var(--rule); border-radius:6px; font-size:13px; white-space:nowrap; }
+.live-badge i { display:block; width:8px; height:8px; border-radius:50%; background:var(--muted); }
+.live-badge.live { color:#18764c; background:#f0faf5; border-color:#c9e9d8; }
+.live-badge.live i { background:#20a363; animation:live-breathe 1.8s ease-in-out infinite; }
+.live-badge.stale { color:var(--short-ink); }
+.live-badge.stale i { background:var(--short-ink); }
+@keyframes live-breathe { 0%,100% { transform:scale(.8); box-shadow:0 0 0 0 #20a36330; } 50% { transform:scale(1.15); box-shadow:0 0 0 5px #20a36310; } }
+.live-number { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.digit { display:inline-block; white-space:pre; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.position-numbers .num.moved { background:transparent; }
+@media(prefers-reduced-motion:reduce) { .live-badge.live i { animation:none; } }
+@media(max-width:720px) { .footer-actions { flex-wrap:wrap; justify-content:flex-start; gap:12px 20px; } .footer-support { flex-wrap:wrap; } .github-link { margin-left:auto; } }
+
+/* The area chart is context for the scorecard, never a competing foreground. */
+.live-figures { position:relative; isolation:isolate; padding:28px 20px 74px; overflow:hidden; }
+.live-figures .fig { position:relative; z-index:1; }
+.basket-background { position:absolute; inset:0; width:100%; height:100%; z-index:-1; pointer-events:none; }
+.basket-movement { position:absolute; bottom:16px; left:20px; right:20px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; font-size:12px; color:var(--ink-2); }
+.movement-percent { color:var(--accent,#315bff); font-variant-numeric:tabular-nums; font-weight:600; }
+.movement-price { color:var(--faint); }
+@media(max-width:600px) { .live-figures { padding-bottom:98px; } .movement-price { flex-basis:100%; } }
+
+.studio { display:flex; flex-direction:column; min-height:100svh; }
+.studio-content { flex:1; min-width:0; padding-bottom:72px; }
+.studio .product-footer { margin-top:0; padding:20px 0 0; }
+.footer-support .support-address { display:inline-flex; align-items:center; gap:10px; border:1px solid #dddde1; border-radius:12px; background:#f3f3f5; color:#65656e; padding:9px 12px; }
+.support-address code { color:inherit; font-size:15px; }
+.live-figures { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:24px; align-items:start; }
+.live-figures .fig { min-width:0; }
+.live-figures .fig .n { min-height:58px; display:flex; align-items:center; font-size:clamp(23px,2.2vw,34px); }
+.live-figures .fig.lead .n { font-size:clamp(32px,3.4vw,50px); }
+.live-figures .fig .l { line-height:1.5; }
+@media(max-width:600px) { .live-figures { grid-template-columns:repeat(2,minmax(0,1fr)); gap:22px 14px; } .live-figures .fig .n { font-size:clamp(17px,4.6vw,26px); min-height:40px; } .live-figures .fig.lead .n { font-size:clamp(24px,6vw,34px); } .studio-content { padding-bottom:48px; } }
+.footer-support { color:var(--action); }
+.footer-support > span { display:inline-flex; align-items:center; gap:8px; }
+.footer-support .support-address { border:0; background:transparent; border-radius:0; color:var(--action); padding:6px 0; }
+.studio .footer-support .support-address:is(:hover,:focus-visible) { color:var(--action); background:transparent; text-decoration:underline; }
+.mini-movement { display:flex; align-items:center; gap:12px; color:var(--action); min-width:0; margin:12px 0; }
+.mini-movement svg { flex:1; min-width:0; height:38px; }
+.mini-movement > span { flex:0 1 auto; font-size:12px; font-variant-numeric:tabular-nums; }
+.mini-movement small { display:block; font-size:10px; color:var(--muted); font-weight:400; }
+.position-top { align-items:flex-start; }
+.position-top .venue,.position-top > span:first-child { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; overflow-wrap:anywhere; line-height:1.5; border-bottom:0; }
+.position-top .side { flex:none; margin-top:3px; }
+.positions-panel { min-width:0; }
+.position-numbers { flex-wrap:wrap; column-gap:14px; row-gap:6px; }
+.positions-head h3 .aside { display:block; margin:6px 0 0; font-size:12px; font-weight:400; }
+.position-row .mini-movement { margin:8px 0 0; }
+/* Size figures within their own column, including large notionals. */
+.live-figures .fig { container-type:inline-size; }
+.live-figures .fig .n { font-size:clamp(16px,9cqw,32px); }
+.live-figures .fig.lead .n { font-size:clamp(20px,11cqw,44px); }
+.card-price-row { display:flex; align-items:center; flex-wrap:wrap; gap:12px 20px; margin:16px 0; }
+.card-price-row .card-cost { margin:0; font-size:clamp(25px,2.5vw,38px); }
+.card-price-row .mini-movement { flex:1 1 110px; max-width:210px; margin:0; }
+.mini-movement { display:grid; grid-template-columns:minmax(70px,1fr) minmax(0,100px); gap:10px; }
+.mini-movement svg { width:100%; min-width:70px; height:38px; }
+.mini-movement > span { overflow-wrap:anywhere; }
+.position-row .mini-movement { grid-template-columns:minmax(90px,1fr) minmax(0,120px); }
+.card-go { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.venue-badge { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); font-weight:400; }
+.venue-badge svg { flex:none; }
+.history-status,.market-current-ask { font-size:11px; color:var(--muted); margin:8px 0 0; }
+.market-current-ask { font-variant-numeric:tabular-nums; }

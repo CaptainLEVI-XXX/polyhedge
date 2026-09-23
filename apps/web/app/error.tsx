@@ -12,7 +12,7 @@ export default function Error({ reset }: { error: Error; reset: () => void }) {
   return (
     <div className="wrap">
       <div className="bar">
-        <span className="brand">PolyHedge</span>
+        <span className="brand">polyhedge</span>
       </div>
       <div className="box">
         <div className="body">

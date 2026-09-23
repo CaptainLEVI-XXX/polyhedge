@@ -1,258 +1,106 @@
 'use client';
-
-import { useCallback, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Connect } from './Session';
-import { StructuredBuilder } from './StructuredBuilder';
-import { Basket } from './Basket';
+import { ProductFooter } from './ProductFooter';
+import { Logo } from './Logo';
+import { useMarketHistory } from '@/lib/use-market-history';
+import { useLiveQuote } from '@/lib/use-live-quote';
+import { useCostCurve } from '@/lib/use-cost-curve';
+import { Basket, PricingWarning, LiveBadge } from './Basket';
 import { Cards } from './Cards';
-import type { QuotedView } from '@/lib/view-model';
-
-/**
- * The whole surface, in two states: choose a basket, or look inside one.
- *
- * It used to be one page with everything on it — eight panels of ladder,
- * allocation, payout table, positions, assumptions, provenance and raw receipt,
- * all at once, before the user had decided anything. That is not detail, it is
- * noise standing between someone and a decision.
- *
- * So: the sentence produces a few complete baskets, shown as cards carrying
- * only what distinguishes them. Opening one replaces the cards with everything
- * about that basket, and Back returns. One decision per screen.
- *
- * The one thing that does NOT move behind a click is the shortfall. What a
- * basket fails to cover is half of what it is, and a card that showed only cost
- * and coverage would be advertising rather than quoting.
- */
-
-type Result =
-  | { kind: 'quoted'; quoteId: string; view: QuotedView }
-  | { kind: 'follow_up'; session: unknown; question: string }
-  | { kind: 'no_market_listed'; furthestListed: string | null }
-  | { kind: 'declined'; reason: string };
-
-interface Turn {
-  who: 'you' | 'ph';
-  text: string;
-  why?: string;
-}
-
-const EXAMPLES = [
-  "I hold 2 BTC and I'd be down about $8,000 if it ends below 77,000 by September 23. I can spend $600.",
-  'I run outdoor events in Chicago and I would lose about $12,000 if it is cold on the 26th.',
-  'I have $2M of floating-rate debt and every 25bp hike costs me about $5,000 a year.',
-];
+import { CostCurve } from './CostCurve';
+import { fieldSuggestions } from '@/lib/studio-guidance';
+import type { StudioReply, StudioExample } from '@/lib/studio-types';
 
 export function Studio() {
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [result, setResult] = useState<Result | null>(null);
-  const [opened, setOpened] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [structuredBusy,setStructuredBusy]=useState(false);
-  const [mode, setMode] = useState<'structured'|'text'>('structured');
-  const [text, setText] = useState('');
-  const [lossLimit, setLossLimit] = useState('');
-  const [maxLegs, setMaxLegs] = useState('');
-  const session = useRef<unknown>(undefined);
-
-  const ask = useCallback(
-    async (words: string) => {
-      if (words === '' || busy) return;
-
-      setTurns((t) => [...t, { who: 'you', text: words }]);
-      setText('');
-      setBusy(true);
-
-      try {
-        const res = await fetch('/api/intake', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          // The session goes back as it was given. The server never rebuilds
-          // state by re-reading a transcript.
-          body: JSON.stringify({ text: words, session: session.current,
-            ...(lossLimit.trim() === '' ? {} : { maxNetLossUsd: Number(lossLimit) }),
-            ...(maxLegs.trim() === '' ? {} : { maxLegs: Number(maxLegs) }) }),
-        });
-        const payload = (await res.json()) as { result?: Result; error?: string };
-        if (!res.ok || payload.result === undefined) {
-          throw new Error(payload.error ?? 'that did not work');
-        }
-
-        const r = payload.result;
-        if (r.kind === 'follow_up') {
-          session.current = r.session;
-          setTurns((t) => [...t, { who: 'ph', text: r.question }]);
-        } else {
-          session.current = undefined;
-          if (r.kind === 'quoted') {
-            setTurns((t) => [
-              ...t,
-              { who: 'ph', text: `Built ${r.view.options.length} ways to cover it.` },
-            ]);
-          } else if (r.kind === 'no_market_listed') {
-            setTurns((t) => [...t, { who: 'ph', text: 'Nothing is listed that settles by then.' }]);
-          } else {
-            setTurns((t) => [...t, { who: 'ph', text: 'Not something this will quote.', why: r.reason }]);
-          }
-        }
-        setOpened(null);
-        setResult(r);
-      } catch (error) {
-        setResult(null);
-        setTurns((t) => [
-          ...t,
-          { who: 'ph', text: error instanceof Error ? error.message : 'that did not work' },
-        ]);
-      } finally {
-        setBusy(false);
+  const [draft,setDraft]=useState<StudioReply|null>(null);
+  const [examples,setExamples]=useState<StudioExample[]>([]);
+  const [exampleRevision,setExampleRevision]=useState(0);
+  const [exampleStatus,setExampleStatus]=useState('Finding current examples…');
+  const [turns,setTurns]=useState<{you:boolean;text:string}[]>([]);
+  const [text,setText]=useState('');
+  const [busy,setBusy]=useState(false);
+  const lock=useRef(false);
+  const [error,setError]=useState('');
+  const [screen,setScreen]=useState<'exposure'|'baskets'|'detail'>('exposure');
+  const [opened,setOpened]=useState('primary');
+  const live=useLiveQuote(draft?.quoteId??'',!!draft?.quoteId&&screen!=='exposure');
+  const currentView=live.view??draft?.view;
+  const marketHistory=useMarketHistory(draft?.quoteId??'',live.quoteId||draft?.quoteId||'',currentView?.options.flatMap(o=>o.ladder.positions.map(p=>p.tokenId))??[],!!draft?.quoteId&&screen!=='exposure');
+  const curve=useCostCurve(draft?.quoteId??'',live.quoteId||draft?.quoteId||'',!!draft?.quoteId&&screen==='baskets',currentView?.options??[],currentView?.parsed.budgetUsd);
+  useEffect(()=>{window.scrollTo({top:0,behavior:'instant'});},[screen]);
+  const [editing,setEditing]=useState<string|null>(null);
+  // An example's prepared session, held until the composer is submitted. The
+  // examples used to fire on click, which meant the one thing a first-time
+  // visitor most needs to see — the sentence that produces a hedge — flashed
+  // past before they could read it.
+  const [staged,setStaged]=useState<StudioExample|null>(null);
+  const [editValue,setEditValue]=useState('');
+  useEffect(()=>{
+    const controller=new AbortController();
+    setExampleStatus('Finding current examples…');
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    let attempts=0;
+    async function load(){
+      try{
+        const r=await fetch('/api/studio',{signal:controller.signal});
+        const b=await r.json();if(!r.ok)throw new Error(b.error??'Examples unavailable');
+        if(controller.signal.aborted)return;
+        setExamples(b.examples);
+        setExampleStatus(b.examples.length?'':b.refreshing?'Finding current examples…':'No complete live examples are currently available. Describe your exposure below.');
+        if(b.refreshing&&++attempts<12)timer=setTimeout(load,5000);
+        else if(b.refreshing&&!b.examples.length)setExampleStatus('Examples are still updating. You can describe your exposure or refresh shortly.');
+      }catch(e){if(!controller.signal.aborted)setExampleStatus(e instanceof Error?e.message:'Examples unavailable');}
+    }
+    void load();
+    return()=>{controller.abort();clearTimeout(timer);};
+  },[exampleRevision]);
+  async function send(action:string,words='',session=draft?.session,field?:string) {
+    if(lock.current)return;
+    lock.current=true;setBusy(true);setError('');
+    if(words)setTurns(t=>[...t,{you:true,text:words}]);
+    try {
+      const res=await fetch('/api/studio',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,text:words,session,field})});
+      const body=await res.json();if(!res.ok||!body.result)throw new Error(body.error??'Could not complete that request. Please try again.');
+      let next=body.result as StudioReply;
+      // Retain the complete brief if pricing fails, so the user can edit or retry.
+      if(next.kind==='brief'&&next.ready&&action!=='build'){
+        setDraft(next);setEditing(null);setText('');setStaged(null);setScreen('exposure');
+        const priced=await fetch('/api/studio',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'build',session:next.session})});
+        const result=await priced.json();
+        if(!priced.ok||!result.result)throw new Error(result.error??'Pricing failed. Your details are saved below; try again.');
+        next=result.result as StudioReply;
       }
-    },
-    [busy, lossLimit, maxLegs],
-  );
-
-  const quoted = result?.kind === 'quoted' ? result : null;
-  const open = quoted !== null && opened !== null ? quoted.view.options[opened] : undefined;
-
-  const basketOpen = quoted !== null && open !== undefined;
-  return <>
-    {basketOpen && <div className="wrap"><Bar /><Basket quoteId={quoted.quoteId} view={quoted.view}
-      index={opened as number} onBack={()=>setOpened(null)} /><Foot /></div>}
-    <div className="wrap" hidden={basketOpen}>
-      <Bar />
-
-      {turns.length === 0 && (
-        <div style={{ marginBottom: 'var(--s6)' }}>
-          <h1 className="statement">Choose what you want to protect.</h1>
-          <p className="lede">
-            Select a listed event and enter what you would lose. See the cost of protection and the loss that remains.
-          </p>
-        </div>
-      )}
-
-      {turns.length > 0 && (
-        <div style={{ marginBottom: 'var(--s5)', maxHeight: 220, overflowY: 'auto' }}>
-          {turns.map((turn, i) => (
-            <div className="turn" key={i}>
-              <span className="who">{turn.who === 'you' ? 'you' : 'ph'}</span>
-              <span className="msg">
-                {turn.text}
-                {turn.why !== undefined && <span className="why">{turn.why}</span>}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="chips"><button disabled={busy||structuredBusy} onClick={()=>setMode('structured')}>Select an event</button><button disabled={busy||structuredBusy} onClick={()=>setMode('text')}>Describe in words</button></div>
-      {mode === 'structured' && <StructuredBuilder onBusyChange={setStructuredBusy} onQuote={(quoteId,view)=>{setResult({kind:'quoted',quoteId,view});setOpened(null);session.current=undefined;}} />}
-      {mode === 'text' && <>
-      <div className="composer">
-        <label htmlFor="exposure" className="sr-only" style={SR_ONLY}>
-          Describe what you would lose
-        </label>
-        <textarea
-          id="exposure"
-          rows={1}
-          value={text}
-          placeholder="What would you lose, how much, and by when?"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void ask(text.trim());
-            }
-          }}
-        />
-        <button className="primary" onClick={() => void ask(text.trim())} disabled={busy}>
-          {busy ? 'Working' : 'Build'}
-        </button>
-      </div>
-
-      <details style={{ marginTop: 'var(--s3)' }}>
-        <summary>Protection limits (optional)</summary>
-        <p className="note">Find the lowest-cost basket that keeps the remaining target loss, including premium and fees, below this amount in every modelled settlement state. Basis risk can leave more loss.</p>
-        <label htmlFor="loss-limit">Maximum remaining target loss ($) </label>
-        <input id="loss-limit" type="number" min="0" step="0.01" value={lossLimit}
-          disabled={busy} onChange={e => setLossLimit(e.target.value)} placeholder="Leave blank to minimize loss" />
-        <p><label htmlFor="max-positions">Maximum positions (optional) </label>
-          <input id="max-positions" type="number" min="1" max="30" step="1" value={maxLegs}
-            disabled={busy} onChange={e => setMaxLegs(e.target.value)} placeholder="No limit" /></p>
-        <p className="note">Fewer positions can cost more or leave more loss. Each quoted quantity respects the reported minimum order size and 0.01-share increments; fills are not guaranteed.</p>
-      </details>
-
-      {turns.length === 0 && (
-        <div className="chips" style={{ marginTop: 'var(--s4)' }}>
-          {EXAMPLES.map((example, i) => (
-            <button key={i} className="chip edit" onClick={() => setText(example)}>
-              {example.slice(0, 46)}…
-            </button>
-          ))}
-        </div>
-      )}
-
-      </>}
-
-      {busy && (
-        <div className="section empty">
-          <span className="spin" />
-          Reading your words, pulling live books, solving.
-        </div>
-      )}
-
-      {!busy && quoted !== null && (
-        <Cards view={quoted.view} onOpen={setOpened} onRefine={(t) => {if(mode==='text')setText(t);else document.querySelector('.structured-builder')?.scrollIntoView({behavior:'smooth'});}} />
-      )}
-
-      {!busy && result?.kind === 'no_market_listed' && (
-        <div className="section">
-          <h2 className="statement">Nothing is listed that settles by then.</h2>
-          <p className="lede">
-            {result.furthestListed === null
-              ? 'This venue lists nothing on that subject at all.'
-              : `The furthest this venue lists is ${result.furthestListed}. A basket cannot be built past the last market that exists.`}
-          </p>
-        </div>
-      )}
-
-      {!busy && result?.kind === 'declined' && (
-        <div className="section">
-          <h2 className="statement">Not something this will quote.</h2>
-          <p className="lede">{result.reason}</p>
-        </div>
-      )}
-
-      <Foot />
-    </div>
-  </>;
-}
-
-const SR_ONLY = {
-  position: 'absolute' as const,
-  width: 1,
-  height: 1,
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-};
-
-function Bar() {
-  return (
-    <div className="bar">
-      <span className="brand">PolyHedge</span>
-      <span className="tag">beta</span>
-      <span className="spacer" />
-      <Connect />
-    </div>
-  );
-}
-
-function Foot() {
-  return (
-    <p className="foot">
-      <span>
-        <strong style={{ color: 'var(--muted)' }}>Not investment advice.</strong> This describes
-        instruments and prices; it does not recommend them.
-      </span>
-      <span className="spacer" />
-      <span>Every position can expire worthless. Prices move within seconds.</span>
-    </p>
-  );
+      setTurns(t=>[...t,{you:false,text:next.question?.text??next.message}]);
+      if(next.kind!=='help'){setDraft(next);setEditing(null);setScreen(next.kind==='quoted'?'baskets':'exposure');}
+      setText('');setStaged(null);
+    }catch(e){setError(e instanceof Error?e.message:'Please try again.');}
+    finally{lock.current=false;setBusy(false);}
+  }
+  const quoted=draft?.kind==='quoted'&&draft.view&&draft.quoteId?draft:null;
+  return <div className="wrap studio">
+    <header className="bar"><Logo/><span className="brand">polyhedge</span><span className="tag">beta</span><span className="spacer"/><Connect/></header>
+    <main className="studio-content">
+    {screen==='detail'&&quoted?.view&&quoted.quoteId ? <Basket marketHistory={marketHistory} key={`${quoted.quoteId}:${opened}`} view={currentView!} initialView={quoted.view} optionId={opened} live={live} onBack={()=>setScreen('baskets')}/> : screen==='baskets'&&quoted?.view ? <>
+      <h1 className="statement">Compare your hedges.</h1>
+      <div className="comparison-live"><LiveBadge live={live}/><PricingWarning live={live}/></div>
+      <Cards history={live.history} view={currentView!} onOpen={i=>{setOpened(currentView!.options[i]!.id);setScreen('detail');}} onRefine={()=>setScreen('exposure')}/>
+      <CostCurve points={curve.points} loading={curve.loading} options={curve.options} budgetUsd={curve.budgetUsd} refreshing={curve.refreshing} refreshFailed={curve.refreshFailed}/>
+    </> : <>
+      <div className="studio-intro"><div className="eyebrow">Start with your exposure</div><h1 className="statement">What could lose you money?</h1><p className="lede">Tell us what could go wrong, when, and what you would lose. We’ll look for matching Polymarket events and show the protection available, its cost, and what remains uncovered.</p></div>
+      {draft?.brief&&<section className="brief"><h3>Your exposure</h3><div className="brief-grid">{draft.brief.map(f=><div className="brief-field" key={f.key}><label>{f.label}</label>{f.readOnly?<div><strong>{f.value||'We’ll clarify this in the conversation'}</strong>{f.key==='trigger'&&draft.question?.key==='eventCondition'&&<div className="field-suggestions">{draft.question.choices?.map(c=><button key={c.value} disabled={busy} onClick={()=>void send('answer',c.value)}>{c.label}</button>)}</div>}</div>:editing===f.key?<form onSubmit={e=>{e.preventDefault();void send('edit',editValue,draft.session,f.key);}}><input autoFocus aria-label={f.label} value={editValue} onChange={e=>setEditValue(e.target.value)} disabled={busy}/><button disabled={busy||!editValue.trim()}>Save</button><button type="button" disabled={busy} onClick={()=>setEditing(null)}>Cancel</button></form>:<button disabled={busy} onClick={()=>{setEditing(f.key);setEditValue(f.value);}}><strong>{f.value||'Enter your own'}</strong><span className={`field-status ${f.status}`}>{f.status==='inferred'?'Confirm this':f.status==='missing'?'Add detail':'Edit'}</span></button>}{f.key==='trigger'&&draft.question?.key==='eventCondition'&&!f.readOnly&&<div className="field-suggestions">{draft.question.choices?.map(c=><button key={c.value} disabled={busy} onClick={()=>void send('answer',c.value)}>{c.label}</button>)}</div>}{f.status==='missing'&&!f.readOnly&&fieldSuggestions(f.key).length>0&&<div className="field-suggestions"><small>Example amounts · choose or enter your own</small>{fieldSuggestions(f.key).map(c=><button key={c.value} disabled={busy} onClick={()=>void send('edit',c.value,draft.session,f.key)}>{c.label}</button>)}</div>}</div>)}</div></section>}
+      {turns.length>0&&<div className="conversation" aria-live="polite">{turns.map((t,i)=><div className="turn" key={i}><span className="who">{t.you?'You':<Logo/>}</span><span className="msg">{t.text}</span></div>)}</div>}
+      {draft?.rules&&<details className="section" open><summary>Settlement rules</summary>{draft.rules.map((r,i)=><p className="note" key={i}>{r}</p>)}</details>}
+      {draft?.question&&examples.length>0&&<div className="guided-examples"><p>Just exploring? Try a complete live example instead.</p><div className="chips">{examples.map(e=><button key={e.id} disabled={busy} onClick={()=>void send('example','',e.session)}>{e.label} →</button>)}</div><small>Uses the example’s exposure, date and amounts. It replaces this brief.</small></div>}
+      {draft?.question?.choices&&<div className="chips">{draft.question.choices.map(c=><button disabled={busy} key={c.value} onClick={()=>void send('answer',c.value)}>{c.label}</button>)}</div>}
+      <form className="composer" onSubmit={e=>{e.preventDefault();const words=text.trim();if(staged){void send('example',words,staged.session);return;}void send(draft?.question?'answer':'describe',words);}}><textarea aria-label="Describe your exposure or ask a question" rows={3} maxLength={2000} value={text} disabled={busy} onChange={e=>setText(e.target.value)} placeholder={draft?.question?(draft.question.choices?'Choose an option above, or type your own answer here.':/outcome:|lossUsd|coverageUsd|budgetUsd/.test(draft.question.key)?'Enter a dollar amount, for example 5000. For an outcome with no loss, enter 0.':/date|deadline/i.test(draft.question.key)?'For example: September 30, 2026. Include the time and timezone if relevant.':'Describe the condition that would cause your loss, for example a rate increase of 25 basis points.'):'For example: I hold 2 BTC and would lose $8,000 if it falls below $77,000 in September. Or ask how hedging here works.'}/><button className="primary" disabled={busy||!text.trim()}>{busy?'Working…':draft?.question?'Send answer':'Continue'} <span aria-hidden>→</span></button></form>
+      {!draft&&<div className="example-list"><span className="eyebrow">Or start from an example · live market prices</span>{examples.map(e=><button className="chip" key={e.id} disabled={busy} onClick={()=>{setStaged(e);setText(e.description);}}>{e.label}</button>)}{exampleStatus&&<p className="note">{exampleStatus}</p>}<button disabled={busy||exampleStatus==='Finding current examples…'} onClick={()=>setExampleRevision(n=>n+1)}>Refresh examples</button></div>}
+      {draft?.ready&&<div className="build-row"><p>Details complete. We’ll price the available hedges against your cover target.</p><button className="primary" disabled={busy||editing!==null} onClick={()=>void send('build')}>{busy?'Pricing hedges…':'Price my hedges →'}</button></div>}
+      {draft&&<button className="back" disabled={busy} onClick={()=>{setDraft(null);setTurns([]);setEditing(null);setText('');setError('');setStaged(null);}}>Start a new exposure</button>}
+    </>}
+    {busy&&<p role="status" className="note"><span className="spin"/> Working on your request…</p>}
+    {error&&<p role="alert" className="note warn">{error}</p>}
+    </main>
+    <ProductFooter/>
+  </div>;
 }

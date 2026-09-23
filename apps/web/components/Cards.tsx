@@ -1,116 +1,50 @@
 'use client';
-
+import { PolymarketMark } from './PolymarketMark';
+import { MiniMovement } from './MiniMovement';
+import type { BasketHistory } from '@/lib/basket-tracking';
+import { LiveNumber } from './LiveNumber';
+import { basketMetrics, money } from '@/lib/basket-metrics';
 import type { QuotedView } from '@/lib/view-model';
 
 /**
- * The choice between whole baskets.
+ * The choice between whole hedges.
  *
- * Each card is a complete, executable basket for the same exposure — not a
- * variant of one answer. They are honestly comparable because every stop solves
- * the SAME target shape, so each one's coverage is already measured against the
- * full loss described, and they were all priced against one pinned snapshot so
- * the prices are the same instant.
- *
- * Three numbers, chosen because they are what differs: what it costs, what it
- * covers, and what it leaves uncovered. The third is the one a product like
- * this is tempted to bury, so it sits on the face of the card in the colour of
- * a loss. A card showing only cost and coverage would be an advertisement.
+ * Three numbers per card, not four: what it costs, what it pays when you are
+ * hurt, and what is still on you. Coverage came off the face because the bar
+ * underneath already carries it, and "minimum cover" plus "worst shortfall"
+ * were one fact wearing two labels.
  */
-export function Cards({
-  view,
-  onOpen,
-  onRefine,
-}: {
-  view: QuotedView;
-  onOpen: (index: number) => void;
-  onRefine: (text: string) => void;
-}) {
-  return (
-    <>
-      <div className="section">
-        <h3>
-          Understood as
-          <span className="aside">click any of these to correct it</span>
-        </h3>
-        <div className="chips">
-          <Chip k="Subject" v={view.parsed.subject} onEdit={onRefine} />
-          <Chip k="Covers" v={view.parsed.exposureLabel} onEdit={onRefine} />
-          <Chip k="Settles" v={view.parsed.settlesLabel.slice(0, 10)} onEdit={onRefine} />
-          {/* Absent rather than zero: an unnamed budget is not a budget of nothing. */}
-          {view.parsed.budgetLabel !== null && (
-            <Chip k="Budget" v={view.parsed.budgetLabel} onEdit={onRefine} />
-          )}
-        </div>
+export function Cards({view,history,onOpen,onRefine}:{view:QuotedView;history:BasketHistory;onOpen:(index:number)=>void;onRefine:(text:string)=>void}) {
+  const options=view.options.map((option,index)=>({option,index,metrics:basketMetrics(option)})).sort((a,b)=>a.option.costUsd-b.option.costUsd);
+  const name=(label:string)=>label==='Lowest loss without a budget cap'?'Lowest loss':label;
+  const over=(costUsd:number)=>view.parsed.budgetUsd!==undefined&&costUsd>view.parsed.budgetUsd;
+  return <>
+    <div className="brief-strip">
+      <div className="brief-summary">
+        <strong>{view.parsed.subject}</strong>
+        <span>{view.parsed.exposureLabel} · pays on {view.event.title} · settles {view.event.settlesLabel.slice(0,10)}{view.parsed.budgetLabel?` · budget ${view.parsed.budgetLabel}`:''}</span>
       </div>
-
-      <div className="section">
-        <h3>
-          {view.options.length === 1 ? 'One way to cover it' : `${view.options.length} ways to cover it`}
-          <span className="aside">priced together, on one snapshot of the book</span>
-        </h3>
-
-        <div className="cards">
-          {view.options.map((option, i) => (
-            <button key={option.id} className="card" onClick={() => onOpen(i)}>
-              <div className="card-name">{option.name}</div>
-              <div className="card-cost">{option.costLabel}</div>
-              <div className="card-reason">{firstSentence(option.reason)}</div>
-
-              <div className="card-line">
-                <span className="k">Pays you</span>
-                <span className="v covered">{option.paysLabel}</span>
-              </div>
-              <div className="card-line">
-                <span className="k">Scenario coverage</span>
-                <span className="v">{option.coverageLabel}</span>
-              </div>
-
-              {option.netLossLabel !== undefined && (
-                <div className="card-line">
-                  <span className="k">Worst loss incl. premium</span>
-                  <span className="v short">{option.netLossLabel}</span>
-                </div>
-              )}
-              <div className="card-line">
-                {/* Never behind a click. */}
-                <span className="k">Not covered</span>
-                <span className="v short">{option.shortfallLabel}</span>
-              </div>
-
-              {(!option.ladder.kind || option.ladder.kind === 'numeric') && <div className="meter" aria-hidden>
-                <span style={{ width: `${Math.min(100, option.coverageRatio * 100)}%` }} />
-              </div>}
-
-              <div className="card-go">
-                Open this basket
-                <span aria-hidden>→</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-}
-
-/**
- * One understood fact, correctable.
- *
- * Editing loads the original words back into the composer rather than opening a
- * field. The sentence is the source of truth — patching a parsed value while
- * leaving the sentence saying something else would give two answers to "what
- * did I ask for".
- */
-function Chip({ k, v, onEdit }: { k: string; v: string; onEdit: (text: string) => void }) {
-  return (
-    <button className="chip edit" onClick={() => onEdit(`${v} — `)} title={`Change: ${v}`}>
-      <span className="k">{k}</span> <b>{v}</b>
-    </button>
-  );
-}
-
-/** Cards carry the claim; the reasoning belongs inside. */
-function firstSentence(reason: string): string {
-  const end = reason.indexOf('. ');
-  return end === -1 ? reason : reason.slice(0, end + 1);
+      <button onClick={()=>onRefine('')}>Edit brief</button>
+    </div>
+    <section className="comparison">
+      <div className="comparison-controls"><span>{options.length} hedges · lowest cost first</span></div>
+      <div className="cards">{options.map(({option,index,metrics:m})=>
+        <button className="card" key={option.id} onClick={()=>onOpen(index)}>
+          <div className="card-heading">
+            <span className="card-name">{name(option.name)}</span>
+            {over(option.costUsd)&&<span className="budget-flag">Over budget</span>}
+          </div>
+          <div className="card-price-row"><div className="card-cost"><LiveNumber text={option.costLabel}/></div><MiniMovement points={history[option.id]??[]} label="Original basket price"/></div>
+          <p>{m.netImprovement>0?`Worst target loss reduced by ${money(m.netImprovement,'down')} after costs.`:'This basket does not reduce your worst target loss after costs.'}</p>
+          <div className="card-line"><span className="k">Pays you at most</span><span className="v covered"><LiveNumber text={money(m.maxPayout,'down')}/></span></div>
+          <div className="card-line"><span className="k">Most you could still lose</span><span className="v short"><LiveNumber text={money(m.netLoss)}/></span></div>
+          {option.trueCostUsd!=null&&<div className="card-line" title="Purchase cost minus expected payout using market-implied probabilities. An estimate, not a fee or guaranteed return."><span className="k">Market-implied net cost</span><span className="v"><LiveNumber text={money(option.trueCostUsd)}/></span></div>}
+          {/* A hedge that overshoots reads as perfect on coverage alone. */}
+          {m.beyondOwed>0&&<div className="card-line"><span className="k">Pays beyond your loss</span><span className="v warn">{money(m.beyondOwed)}</span></div>}
+          <div className="meter" aria-hidden><span style={{width:`${m.minimumCoverage*100}%`}}/></div>
+          <div className="card-go"><span>Look inside →</span><span className="venue-badge"><PolymarketMark/> Polymarket</span></div>
+        </button>)}</div>
+      <p className="comparison-caption">Cover is measured against your target. Prices include venue fees and move with the book.</p>
+    </section>
+  </>;
 }
