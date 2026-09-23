@@ -13,7 +13,7 @@ export interface SafeError {
   /** Shown to the user. Plain register. */
   message: string;
   /** Machine-readable, for the client to branch on. Never displayed. */
-  code: 'model_unavailable' | 'venue_unavailable' | 'bad_request' | 'unknown';
+  code: 'model_unavailable' | 'venue_unavailable' | 'bad_request' | 'catalogue_pending' | 'unknown';
 }
 
 const MODEL_HINTS = ['jev', 'typesafe', 'systemone', 'ai_gateway'];
@@ -22,6 +22,8 @@ const VENUE_HINTS = ['gamma', 'clob', 'polymarket', 'book'];
 export function toSafeError(error: unknown): SafeError {
   const raw = error instanceof Error ? error.message : String(error);
   const lower = raw.toLowerCase();
+  if (raw === 'catalogue_pending') return { status:503, code:'catalogue_pending',
+    message:'Market discovery is still updating. Please try again shortly; a matching market may still be available.' };
 
   if (lower.includes('api key') || lower.includes('ai_gateway_api_key')) {
     // Never echo anything key-shaped, even a complaint about one.

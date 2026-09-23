@@ -57,5 +57,11 @@ describe('parseLadder', () => {
 
     // Two open tops is not a partition.
     expect(parseLadder(['<10', '10-20', '20+', '30+'])).toBeNull();
+
+    // Overlapping brackets would pay twice in one state.
+    expect(parseLadder(['<10', '5-20', '20+'])).toBeNull();
+
+    // An inverted range is refused rather than silently swapped.
+    expect(parseLadder(['<10', '20-10', '20+'])).toBeNull();
   });
 });

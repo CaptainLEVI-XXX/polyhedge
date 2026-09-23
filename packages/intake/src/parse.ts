@@ -53,7 +53,9 @@ function extractContext(text: string, index: number, matchLength: number): strin
 export function findNumbers(text: string): NumberCandidate[] {
   const candidates: NumberCandidate[] = [];
 
+  const dates=[...text.matchAll(/\b\d{4}-\d{2}-\d{2}(?:T[\d:.]+(?:Z|[+-]\d{2}:\d{2})?)?/gi)];
   for (const match of text.matchAll(NUMBER_PATTERN)) {
+    if(dates.some(date=>match.index>=date.index && match.index<date.index+date[0].length))continue;
     const raw = match[0];
     if (raw === undefined || raw.length === 0) continue;
     const index = match.index;
@@ -61,7 +63,7 @@ export function findNumbers(text: string): NumberCandidate[] {
     const value = parseAmount(raw);
     if (value === null) continue;
 
-    const suffix = text.slice(index + raw.length).match(/^\s*(°\s*[CF]\b|degrees?\s+(?:Fahrenheit|Celsius)\b|Fahrenheit\b|Celsius\b|%|bps\b)/i)?.[1];
+    const suffix = text.slice(index + raw.length).match(/^\s*(°\s*[CF]\b|degrees?\s+(?:Fahrenheit|Celsius)\b|Fahrenheit\b|Celsius\b|[CF]\b|%|bps\b)/i)?.[1];
     const unit = suffix ? /fahrenheit|f$/i.test(suffix) ? "°F" : /celsius|c$/i.test(suffix) ? "°C" : suffix.toLowerCase() : raw.startsWith("$") ? "$" : undefined;
     candidates.push({
       ...(unit ? { unit } : {}),
@@ -101,7 +103,7 @@ const MONTHS: Record<string, number> = {
  * would take "20" as the day and silently quote a date three weeks off. A
  * refusal to parse is recoverable by asking; a confident wrong date is not.
  */
-const DEADLINE_PATTERN = /\b(?:by|on)\s+([A-Za-z]+)\.?\s*(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/gi;
+const DEADLINE_PATTERN = /\b(?:by|on)\s+(?:the\s+)?([A-Za-z]+)\.?\s*(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/gi;
 
 /**
  * Parses a phrase like "by Dec 31" or "by December 31 2027" into an ISO date.
@@ -115,7 +117,16 @@ const DEADLINE_PATTERN = /\b(?:by|on)\s+([A-Za-z]+)\.?\s*(\d{1,2})(?!\d)(?:st|nd
  * Returns `null` for an impossible calendar date (e.g. "Feb 29" in a
  * non-leap year) rather than emitting a malformed ISO string.
  */
-export function parseDeadline(text: string, today: Date): Parsed<string> | null {
+function parseCalendarDeadline(text: string, today: Date): Parsed<string> | null {
+  // Normalize unambiguous day-first and ISO dates; numeric slash dates remain
+  // ambiguous across locales and must be clarified rather than guessed.
+  text = text.replace(/\b(by|on)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)(?:,?\s+(\d{4}))?/gi,
+    (_, prefix: string, day: string, month: string, year: string | undefined) => `${prefix} ${month} ${day}${year ? ` ${year}` : ''}`)
+    .replace(/\b(by|on)\s+(\d{4})-(\d{2})-(\d{2})\b/gi,
+      (raw: string, prefix: string, year: string, month: string, day: string) => {
+        const name = Object.keys(MONTHS).find(k => MONTHS[k] === Number(month));
+        return `${prefix} ${name ?? 'invalidmonth'} ${day} ${year}`;
+      });
   // Later explicit answers can correct an earlier deadline.
   const match = [...text.matchAll(DEADLINE_PATTERN)].at(-1);
   if (!match) return null;
@@ -171,5 +182,40 @@ export function parseUnderlying(text: string): 'BTC' | 'ETH' | 'OTHER' | null {
   if (BTC_PATTERN.test(text)) return 'BTC';
   if (ETH_PATTERN.test(text)) return 'ETH';
   if (OTHER_PATTERN.test(text)) return 'OTHER';
+  return null;
+}
+
+/** Preserve explicit instants, including offsets; never turn a time into midnight. */
+export function parseDeadline(text:string,today:Date):Parsed<string>|null {
+  const markers=[...text.matchAll(/\b(?:by|on)\s+|\b(?:protection date|deadline)(?:\s+is)?\s*:\s*/gi)];
+  const tails=markers.reverse().map(m=>text.slice(m.index+m[0].length).trim());
+  if(!markers.length)tails.push(text.trim());
+  for(const tail of tails){
+    if(/^\d{4}-/.test(tail)){
+      const m=/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2}))?(?=$|[\s.;,!?])/i.exec(tail);
+      if(!m)return null;
+      if(m[4]===undefined&&/^\s+(?:at\s+)?\d{1,2}(?::|\s*(?:am|pm)\b)/i.test(tail.slice(m[0].length)))return null;
+      const [year,month,day]=[Number(m[1]),Number(m[2]),Number(m[3])];
+      const calendar=new Date(Date.UTC(year!,month!-1,day));
+      if(calendar.getUTCFullYear()!==year||calendar.getUTCMonth()!==month!-1||calendar.getUTCDate()!==day)return null;
+      if(m[4]!==undefined&&(Number(m[4])>23||Number(m[5])>59||Number(m[6]??0)>59))return null;
+      if(m[8]&&m[8].toUpperCase()!=='Z'&&(Number(m[8].slice(1,3))>23||Number(m[8].slice(4))>59))return null;
+      const ms=Date.parse(m[0]);if(!Number.isFinite(ms))return null;
+      return {value:m[4]===undefined?m[0]:new Date(ms).toISOString().replace('.000Z','Z'),raw:m[0],provenance:'stated'};
+    }
+    if(/^\d+[\/]/.test(tail))return null;
+    const date=parseCalendarDeadline(`by ${tail}`,today);
+    if(date){
+      const clock=/\bat\s+(\d{1,2}):(\d{2})\s*(UTC|GMT)\b/i.exec(tail);
+      if(clock){
+        if(Number(clock[1])>23||Number(clock[2])>59)return null;
+        return {...date,value:`${date.value}T${clock[1]!.padStart(2,'0')}:${clock[2]}:00Z`,raw:`${date.raw} ${clock[0]}`};
+      }
+      // An explicit clock without a supported timezone needs clarification.
+      if(/\bat\s+\d{1,2}(?::|\s*(?:am|pm)\b)/i.test(tail))return null;
+      return date;
+    }
+    if(/^(?:the\s+)?(?:[A-Za-z]+\.?\s*\d|\d{1,2}\s+[A-Za-z])/.test(tail))return null;
+  }
   return null;
 }

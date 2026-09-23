@@ -72,6 +72,7 @@ import {
 import type { NamedLevel, Parsed, TypedExposure } from './types.js';
 
 export type IntakeResult =
+  | { kind: 'prepared'; request: QuoteRequest; exposure: TypedExposure; assumptions: string[]; options: QuoteOptions }
   | { kind: 'quoted'; record: QuoteRecord; alternatives: Alternative[]; assumptions: string[] }
   | { kind: 'follow_up'; session: IntakeSession; question: string }
   | { kind: 'no_market_listed'; furthestListed: string | null; perpAvailable: boolean }
@@ -80,6 +81,8 @@ export type IntakeResult =
 export interface IntakeDeps extends QuoteDeps {
   /** Batch shape interpretation with extraction; uncertain results use the detailed fallback. */
   combinedShape?: boolean;
+  /** Read back the interpreted exposure before fetching books or solving. */
+  prepareOnly?: boolean;
   protectionGoal?: QuoteRequest['protectionGoal'];
   execution?: QuoteRequest['execution'];
   onTiming?: (name: string, milliseconds: number) => void;
@@ -201,7 +204,7 @@ function followUpQuestion(field: string, deadline: Parsed<string> | null): strin
     case 'underlying':
       return 'I could not match that to any market that is listed. What are you exposed to — the thing whose price or level you would lose on?';
     case 'deadline':
-      return 'By what date do you need this protection to run? The date is what picks the market — "by Dec 31", for example.';
+      return 'When do you need this protection? Please include the day, month and year.';
     case 'deadlineStated':
       return deadline === null
         ? 'By what date do you need this protection to run?'
@@ -309,7 +312,7 @@ export function assembleExposure(
       return answer === undefined ? [] : [[key, calibrate(answer, calibration)]];
     }),
   );
-  const routed = route(calibratedFields, FIXED_FIELD_POLICIES, followUpsAsked);
+  const routed = route(calibratedFields, FIXED_FIELD_POLICIES, followUpsAsked, 20);
   if (routed.kind === 'decline') {
     return { kind: 'declined', reason: declineReason(routed.field, routed.reason) };
   }
@@ -502,8 +505,8 @@ function followUpResult(
   field: string,
   question: string,
 ): IntakeResult {
-  if (base.followUpsAsked >= 2) {
-    return { kind: 'declined', reason: `Could not establish ${field} after two follow-ups.` };
+  if (base.followUpsAsked >= 20) {
+    return { kind: 'declined', reason: `We still need more detail to build this protection. Please start a new description with the exposure, date and potential loss.` };
   }
   let session: IntakeSession = { ...base, assumptions: [] };
   for (const note of assumptions) session = addAssumption(session, note);
@@ -634,9 +637,7 @@ export async function intake(
     continued?.answers,
   );
 
-  if (assembled.kind === 'declined') {
-    return { kind: 'declined', reason: assembled.reason };
-  }
+  if (assembled.kind === 'declined') return { kind: 'declined', reason: assembled.reason };
   if (assembled.kind === 'follow_up') {
     return followUpResult(
       base,
@@ -674,7 +675,7 @@ export async function intake(
     return followUpResult(base, assumptions, exposure, 'threshold', followUpQuestion('threshold', deadline));
   }
 
-  if (/\b(temperature|fahrenheit|celsius|degrees?|cold|hot)\b|°[CF]/i.test(sourceText)
+  if (/\b(temperature|fahrenheit|celsius|degrees?|cold|hot|daily high|daily low)\b|°[CF]/i.test(sourceText)
     && exposure.levels.some(level => level.unit !== '°F' && level.unit !== '°C')) {
     return followUpResult(base, assumptions, exposure, 'threshold',
       'What temperature triggers the loss, in °F or °C? Also specify the daily high, daily low, or temperature during your event.');
@@ -762,6 +763,8 @@ export async function intake(
     }
     throw err;
   }
+
+  if (deps.prepareOnly) return { kind: 'prepared', request, exposure, assumptions, options };
 
   const pinned = quoteSession(deps);
   const quoteStarted = performance.now();

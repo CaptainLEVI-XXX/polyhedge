@@ -389,15 +389,23 @@ function withAliases(words: string[]): Set<string> {
  * and this must not introduce a ranking of its own for that to be the
  * ordering the pipeline acts on.
  */
+const subjectIndexes = new WeakMap<IndexedEvent[],Map<string,Set<number>>>();
 export function candidatesForText(text: string, events: IndexedEvent[]): IndexedEvent[] {
   const wanted = withAliases(subjectWords(text));
   if (wanted.size === 0) return [];
-
-  return events.filter((event) => {
-    const theirs = withAliases(subjectWords(`${event.title} ${event.seriesTicker.replace(/-/g, ' ')}`));
-    for (const word of theirs) if (wanted.has(word)) return true;
-    return false;
-  });
+  let postings=subjectIndexes.get(events);
+  if(!postings){
+    postings=new Map();
+    events.forEach((event,id)=>{
+      for(const word of withAliases(subjectWords(`${event.title} ${event.seriesTicker.replace(/-/g,' ')}`))){
+        let hits=postings!.get(word);if(!hits){hits=new Set();postings!.set(word,hits);}hits.add(id);
+      }
+    });
+    subjectIndexes.set(events,postings);
+  }
+  const matches=new Set<number>();
+  for(const word of wanted)for(const id of postings.get(word)??[])matches.add(id);
+  return [...matches].sort((a,b)=>a-b).map(id=>events[id]!);
 }
 
 /**

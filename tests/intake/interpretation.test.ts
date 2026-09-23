@@ -266,3 +266,18 @@ describe('selectShape', () => {
     expect(selection.modelVersion).toBe('jev-1.13.0');
   });
 });
+
+it('reads labelled dates and explicit instants without converting timestamp digits into money',()=>{
+  const today=new Date('2026-09-20T00:00:00Z');
+  for(const prefix of ['Protection date: ','by ','on ','Deadline: ']){
+    expect(parseDeadline(`${prefix}2026-09-23T16:00:00Z.`,today)?.value).toBe('2026-09-23T16:00:00Z');
+    expect(parseDeadline(`${prefix}2026-09-23.`,today)?.value).toBe('2026-09-23');
+  }
+  expect(parseDeadline('by 2026-09-23T21:30:00+05:30',today)?.value).toBe('2026-09-23T16:00:00Z');
+  expect(parseDeadline('Protection date: September 23 2026',today)?.value).toBe('2026-09-23');
+  expect(parseDeadline('on September 24, 2026 at 16:00 UTC.',today)?.value).toBe('2026-09-24T16:00:00Z');
+  expect(parseDeadline('on September 24, 2026 at 4 pm.',today)).toBeNull();
+  expect(parseDeadline('by 2026-09-23T16:00:00Z. Actually by September 24 2026.',today)?.value).toBe('2026-09-24');
+  for(const text of ['2026-02-30T16:00:00Z','2026-09-23T25:00:00Z','2026-09-23T16:00:00','09/10/2026'])expect(parseDeadline(`Protection date: ${text}`,today)).toBeNull();
+  expect(findNumbers('Protection date: 2026-09-23T16:00:00Z. Potential loss $8000; budget $1000.').map(n=>n.value)).toEqual([8000,1000]);
+});

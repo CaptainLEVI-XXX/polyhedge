@@ -72,6 +72,14 @@ function answersFor(count: number, edgeCaseRisk = 0.02): Record<string, Answer> 
 }
 
 describe('assessFit', () => {
+  it('accepts dollar levels only with an explicit price currency and flags stablecoin basis risk', async () => {
+    const exposure:TypedExposure={...EXPOSURE,levels:[{value:60000,role:'threshold',unit:'$'}]};
+    const matching=await assessFit(exposure,'threshold_digital',[candidate(0)],createMockEngine(answersFor(1)));
+    expect(matching.fits[0]?.inScope).toBe(true);
+    expect(matching.fits[0]?.ruleFlags.some(f=>f.includes('stablecoin-quoted'))).toBe(true);
+    const unproven=await assessFit(exposure,'threshold_digital',[candidate(0,'Settles on the final observation.')],createMockEngine(answersFor(1)));
+    expect(unproven.fits[0]?.inScope).toBe(false);
+  });
   it('rejects missing or incompatible temperature units even when the model approves', async () => {
     const c = candidate(0);
     c.event = indexed({ ladder: { ...LADDER, unit: '°F', span: { lo: -10, hi: 100 } } });

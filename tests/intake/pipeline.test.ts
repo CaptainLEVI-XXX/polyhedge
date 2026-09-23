@@ -247,7 +247,7 @@ describe('intake', () => {
     expect(result.kind).toBe('follow_up');
     expect(missing.engineCalls()).toBe(1);
   });
-  it('routes fixed fields after calibration and caps missing-field follow-ups', async () => {
+  it('routes calibrated fields and permits separate clarification turns before the session limit', async () => {
     const result = assembleExposure('BTC by Dec 31', {
       answers: commonAnswers(), candidates: [], modelVersion: 'jev-test',
     }, { value: '2026-12-31', raw: 'Dec 31', provenance: 'inferred' }, 'BTC', 0,
@@ -256,7 +256,9 @@ describe('intake', () => {
     const { deps, engineCalls } = harness(commonAnswers(), []);
     const session = ask({ ...newSession('I need protection', 's'), followUpsAsked: 1 }, 'underlying', 'Which asset?');
     const capped = await intake('not sure', deps, session);
-    expect(capped.kind).toBe('declined');
+    expect(capped.kind).toBe('follow_up');
+    const exhausted = await intake('not sure', deps, { ...session, followUpsAsked: 20 });
+    expect(exhausted.kind).toBe('declined');
     expect(parseDeadline('by Dec 31. My deadline is by Jan 5 2027.', TODAY)?.value).toBe('2027-01-05');
     expect(engineCalls()).toBe(0);
   });
@@ -280,6 +282,11 @@ describe('intake', () => {
     };
 
     const { deps } = harness(answers, [indexed('2026-12-31T17:00:00Z')]);
+    const prepared = await intake(text, { ...deps, prepareOnly: true,
+      fetchBooks: async () => { throw new Error('Readback must not fetch books'); },
+      saveSnapshot: async () => { throw new Error('Readback must not save quotes'); },
+    });
+    expect(prepared.kind).toBe('prepared');
     const result = await intake(text, deps);
 
     if (result.kind !== 'quoted') throw new Error(`expected a quote, got ${result.kind}`);

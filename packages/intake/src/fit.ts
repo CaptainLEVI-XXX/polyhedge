@@ -367,12 +367,21 @@ export async function assessFit(
 
     // Code first: a ladder that cannot express the user's levels is out
     // regardless of what the model thought of it.
+    // Some price ladders omit currency from bracket labels. Read an explicit
+    // quote currency from the published price rule; never treat every bare
+    // numeric axis (temperature, counts, percentages) as dollars.
+    const dollarPrice = candidate.event.ladder.unit === ''
+      && /\bprice\b/i.test(candidate.event.title)
+      && /\b(?:[A-Z0-9]+[\/_]USD[TC]?|USD|US dollars?)\b/i.test(candidate.resolutionText);
+    if (dollarPrice && /[\/_]USD[TC]\b/i.test(candidate.resolutionText) && exposure.levels.some(l=>l.unit==='$')) {
+      ruleFlags.push('The venue observes a stablecoin-quoted price. It can differ from a US-dollar price or the price on your own exchange; this basis risk remains.');
+    }
     const unitsMatch = exposure.levels.every(level => {
       const marketUnit = candidate.event.ladder.unit;
       // A temperature without a unit is not safely comparable. No implicit
       // Celsius/Fahrenheit or percent/basis-point conversion is performed.
       if (marketUnit === '°C' || marketUnit === '°F') return level.unit === marketUnit;
-      return level.unit === undefined || level.unit === marketUnit;
+      return level.unit === undefined || level.unit === marketUnit || (level.unit === '$' && dollarPrice);
     });
     if (!unitsMatch) ruleFlags.push('The stated levels and market brackets use different or unspecified units.');
     const covers = ladderCovers(exposure.levels, candidate.event.ladder.span);
