@@ -1,7 +1,8 @@
+import { fixedBasketCost } from '@/lib/basket-tracking';
 import { randomUUID } from 'node:crypto';
 import type { ClobBook } from '@polyhedge/venue';
 import { getQuote, getSnapshot, NotYours } from '@/lib/store';
-import { MarketGone, reprice } from '@/lib/reprice';
+import { reprice } from '@/lib/reprice';
 import { marketFeed } from '@/lib/stream';
 import { mayApply, watchFor } from '@/lib/freshness';
 import { requireCaller } from '@/lib/identity';
@@ -28,8 +29,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   const { id } = await context.params;
 
   let current: StoredQuote;
+  let original: StoredQuote;
   try {
     current = await getQuote(id, caller.id);
+    original=await getQuote(new URL(request.url).searchParams.get('baseline')??id,caller.id);
+    if(original.record.request.eventId!==current.record.request.eventId) return Response.json({error:'Baseline event differs.'},{status:400});
   } catch (error) {
     if (error instanceof NotYours) {
       return Response.json({ error: 'No such quote.', code: 'not_found' }, { status: 404 });
@@ -45,6 +49,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   let supersededAt: number | null = null;
   let unsubscribe: (() => void) | null = null;
   let closed = false;
+  let priceTimer:ReturnType<typeof setTimeout>|null=null;
+  const pendingPrices:Record<string,number|null>={};
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -71,17 +77,24 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         }
       };
 
-      const buildWatch = async (record: StoredQuote) =>
-        watchFor(
-          // Every leg the solver could have taken, not only the ones it did: an
-          // unheld YES or NO can become the cheapest way to build the same
-          // protection, and watching only holdings structurally misses that.
-          record.record.resolved.legs.map((l) => l.tokenId),
-          record.record.basket.legs.map((l) => ({ tokenId: l.tokenId, shares: l.shares })),
-          await booksFor(record),
-        );
+      const buildWatch = async (record:StoredQuote) => {
+        const records=[...Object.values(record.optionRecords??{primary:record.record}),...Object.values(original.optionRecords??{primary:original.record})];
+        const shares=new Map<string,number>();
+        for(const option of records)for(const leg of option.basket.legs)shares.set(leg.tokenId,Math.max(shares.get(leg.tokenId)??0,leg.shares));
+        return watchFor([...new Set(records.flatMap(option=>option.resolved.legs.map(l=>l.tokenId)))],
+          [...shares].map(([tokenId,shares])=>({tokenId,shares})),await booksFor(record));
+      };
 
+      const track=async(record:StoredQuote,initial=false)=>{
+        const books=await booksFor(record);
+        const costs:Record<string,number|null>={};
+        for(const [key,base] of Object.entries(original.optionRecords??{primary:original.record}))costs[key]=fixedBasketCost(base,record.record,books);
+        const prices:Record<string,number|null>={};
+        for(const leg of record.record.resolved.legs){const asks=books.get(leg.tokenId)?.asks;prices[leg.tokenId]=asks?.length?Math.min(...asks.map(l=>l.priceMicros))/1_000_000:null;}
+        send('tracking',{at:initial?Date.parse(original.createdAt):Date.parse(record.createdAt),costs,...(initial?{prices}:{}),initial});
+      };
       const watch = await buildWatch(current);
+      if(request.signal.aborted){closed=true;controller.close();return;}
 
       send('open', {
         quoteId: current.id,
@@ -99,10 +112,23 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         return;
       }
 
+      await track(original,true);
+      if(current.id!==original.id)await track(current);
       unsubscribe = feed.add({
         id: watcherId,
         watch,
         notify: (state) => send('feed', { state }),
+        marketPrice:(tokenId,ask)=>{
+          pendingPrices[tokenId]=ask;
+          // Bound UI traffic independently of solver speed; do not reset a
+          // trailing timer on every tick and starve a busy market's chart.
+          priceTimer??=setTimeout(()=>{
+            priceTimer=null;
+            const prices={...pendingPrices};
+            for(const token of Object.keys(pendingPrices))delete pendingPrices[token];
+            if(!closed&&frozenAt===null)send('market-prices',{at:Date.now(),prices});
+          },500);
+        },
         resolve: async (reason) => {
           const startedAt = Date.now();
           const from = current;
@@ -119,15 +145,11 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
           }
 
           let result;
+          send('pricing',{state:'updating'});
           try {
             result = await reprice(latest, caller.id);
-          } catch (error) {
-            if (error instanceof MarketGone) {
-              send('gone', { reason: 'That market is no longer listed.' });
-              unsubscribe?.();
-              return;
-            }
-            send('feed', { state: 'stale' });
+          } catch {
+            send('pricing', { state: 'failed' });
             return;
           }
 
@@ -137,6 +159,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
           if (!mayApply(startedAt, frozenAt, supersededAt)) return;
           supersededAt = startedAt;
           current = result.next;
+          await track(current);
 
           // Re-derive the watch: a new basket consumes different depth, and
           // watching the old fill would miss the new one.
@@ -158,6 +181,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
       request.signal.addEventListener('abort', () => {
         closed = true;
+        if(priceTimer!==null)clearTimeout(priceTimer);
         unsubscribe?.();
         try {
           controller.close();
@@ -168,6 +192,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     },
     cancel() {
       closed = true;
+      if(priceTimer!==null)clearTimeout(priceTimer);
       unsubscribe?.();
     },
   });

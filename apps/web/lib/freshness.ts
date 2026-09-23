@@ -70,17 +70,18 @@ export function assess(watch: Watch, previous: ClobBook | undefined, next: ClobB
  * price from the middle of it. Trailing means the solve runs against where the
  * book actually settled.
  */
-export function debounce(fn: () => void, ms: number): { fire: () => void; cancel: () => void } {
+export function debounce(fn: () => void, ms: number, maxWaitMs?:number): { fire: () => void; cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let deadline:ReturnType<typeof setTimeout>|null=null;
+  const flush=()=>{if(timer!==null)clearTimeout(timer);if(deadline!==null)clearTimeout(deadline);timer=null;deadline=null;fn();};
   return {
     fire: () => {
       if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        fn();
-      }, ms);
+      timer = setTimeout(flush, ms);
+      if(maxWaitMs!==undefined&&deadline===null)deadline=setTimeout(flush,maxWaitMs);
     },
     cancel: () => {
+      if(deadline!==null)clearTimeout(deadline);deadline=null;
       if (timer !== null) clearTimeout(timer);
       timer = null;
     },

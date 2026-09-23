@@ -1,3 +1,5 @@
+import { fixedBasketCost } from '../../apps/web/lib/basket-tracking.js';
+import type { QuoteRecord } from '../../packages/engine/src/index.js';
 import { describe, expect, it, vi } from 'vitest';
 import { assess, mayApply, watchFor } from '../../apps/web/lib/freshness.js';
 import { MarketFeed } from '../../apps/web/lib/stream.js';
@@ -126,4 +128,63 @@ describe('re-pricing a watched quote', () => {
       vi.useRealTimers();
     }
   });
+});
+
+it('processes batched price changes without starving or overlapping solves during continuous traffic',async()=>{
+  vi.useFakeTimers();
+  let stop:()=>void=()=>{};
+  try{
+    const feed=new MarketFeed(noSocket);
+    let release:()=>void=()=>{};
+    const resolve=vi.fn(()=>new Promise<void>(done=>{release=done;}));
+    stop=feed.add({id:'burst',watch:{eligibleTokens:['t'],consumedTo:new Map([['t',500000]]),tickMicros:10000},resolve,notify:()=>{}});
+    await vi.advanceTimersByTimeAsync(100);
+    feed.ingest(frame('t',[[400000,100]]));
+    for(let i=0;i<16;i++){
+      await vi.advanceTimersByTimeAsync(100);
+      feed.ingest(JSON.stringify({event_type:'price_change',market:'m',price_changes:[{asset_id:'t',price:'0.4',size:String(100-i),side:'SELL'}]}));
+    }
+    expect(resolve).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    release();await vi.advanceTimersByTimeAsync(1);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    release();
+  }finally{stop();vi.useRealTimers();}
+});
+
+describe('original basket price tracking',()=>{
+  it('keeps original quantities when the optimizer changes allocations, walks depth and includes current fees',()=>{
+    const original={basket:{legs:[{tokenId:'t',shares:10}]}} as unknown as QuoteRecord;
+    const current={basket:{legs:[{tokenId:'other',shares:200}]},resolved:{legs:[{tokenId:'t'}],feeRates:[.1]}} as unknown as QuoteRecord;
+    const books=new Map([['t',book('t',[[600_000,6],[400_000,4]])]]);
+    expect(fixedBasketCost(original,current,books)).toBeCloseTo(5.44,10);
+    books.set('t',book('t',[[400_000,9]]));
+    expect(fixedBasketCost(original,current,books)).toBeNull();
+    expect(fixedBasketCost(original,{...current,resolved:{...current.resolved,feeRates:[]}},books)).toBeNull();
+  });
+});
+
+it('streams sub-cent best-ask moves while a basket solve is still pending, without inventing size-only moves',async()=>{
+  vi.useFakeTimers();
+  const feed=new MarketFeed(noSocket);
+  const marketPrice=vi.fn();
+  let release=()=>{};
+  const resolve=vi.fn(()=>new Promise<void>(done=>{release=done;}));
+  const stop=feed.add({id:'prices',watch:{eligibleTokens:['t'],consumedTo:new Map(),tickMicros:10000},resolve,notify:()=>{},marketPrice});
+  try{
+    await vi.advanceTimersByTimeAsync(100);
+    feed.ingest(frame('t',[[400000,100]]));
+    await vi.advanceTimersByTimeAsync(800);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    marketPrice.mockClear();
+    feed.ingest(JSON.stringify({event_type:'price_change',price_changes:[{asset_id:'t',price:'0.399',size:'10',side:'SELL'}]}));
+    expect(marketPrice).toHaveBeenLastCalledWith('t',.399,expect.any(Number));
+    feed.ingest(JSON.stringify({event_type:'price_change',price_changes:[{asset_id:'t',price:'0.399',size:'20',side:'SELL'}]}));
+    expect(marketPrice).toHaveBeenCalledTimes(1);
+    feed.ingest(frame('t',[]));
+    expect(marketPrice).toHaveBeenLastCalledWith('t',null,expect.any(Number));
+    feed.ingest(frame('other',[[500000,10]]));
+    expect(marketPrice).toHaveBeenCalledTimes(2);
+  }finally{stop();release();vi.useRealTimers();}
 });

@@ -12,14 +12,10 @@ import { assess, debounce, type Watch } from './freshness.js';
  * forward what it heard back to us. It would also expose the whole subscription
  * surface per tab and multiply the venue's load by the number of open tabs.
  *
- * **What arrives here triggers a re-price; it never becomes the price.** The
- * book this module maintains from `price_change` deltas is good enough to
- * answer "did anything that matters move", and that is all it is asked. Every
- * quote is still priced by `quote()` against a freshly fetched, content-hashed
- * snapshot. So a delta we applied imperfectly can cost a redundant solve or a
- * late one — it can never produce a number a user sees. Maintaining a book well
- * enough to *price* from is a different and much more dangerous job, and this
- * does not attempt it.
+ * Socket books trigger validated repricing and supply indicative best-ask
+ * chart points. They never determine executable basket costs or quantities:
+ * those always come from fresh, content-hashed REST snapshots.
+
  */
 
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
@@ -27,7 +23,7 @@ const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 /** No traffic for this long and we say so rather than implying freshness. */
 const STALE_AFTER_MS = 30_000;
 const DEBOUNCE_MS = 750;
-const MAX_CONCURRENT_SOLVES = 4;
+const MAX_CONCURRENT_SOLVES = 2;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 /** The venue drops a connection that goes quiet. */
 const PING_MS = 10_000;
@@ -39,6 +35,8 @@ export interface Watcher {
   resolve(reason: string): Promise<void>;
   /** Feed-level notices, distinct from a new price. */
   notify(state: 'live' | 'stale' | 'reconnected'): void;
+  /** Indicative chart only; never an executable fill price. */
+  marketPrice?(tokenId:string,ask:number|null,at:number):void;
 }
 
 interface BookMessage {
@@ -105,6 +103,8 @@ export class MarketFeed {
   private readonly pending = new Map<string, { fire: () => void; cancel: () => void }>();
   private readonly reasons = new Map<string, string>();
   private inFlight = 0;
+  private readonly solving=new Set<string>();
+  private retryTimer:ReturnType<typeof setTimeout>|null=null;
   private queue: string[] = [];
   private attempt = 0;
   private lastMessageAt = Date.now();
@@ -116,7 +116,9 @@ export class MarketFeed {
   constructor(private readonly connect: (url: string) => WebSocket = (url) => new WebSocket(url)) {}
 
   add(watcher: Watcher): () => void {
-    this.watchers.set(watcher.id, watcher);
+    let lastState:string|undefined;
+    const notify=watcher.notify;
+    this.watchers.set(watcher.id,{...watcher,notify:state=>{if(state!==lastState){lastState=state;notify(state);}}});
     // One reconnect for a burst of arrivals, not one per arrival.
     this.resubscribe ??= debounce(() => this.open(), 100);
     this.resubscribe.fire();
@@ -143,7 +145,7 @@ export class MarketFeed {
   private open(): void {
     if (this.watchers.size === 0) return;
     this.close();
-
+    this.books.clear();
     const socket = this.connect(WS_URL);
     this.socket = socket;
 
@@ -167,11 +169,8 @@ export class MarketFeed {
     });
 
     socket.addEventListener('message', (event: MessageEvent) => {
+      if(this.socket!==socket)return;
       this.lastMessageAt = Date.now();
-      if (this.announcedStale) {
-        this.announcedStale = false;
-        for (const w of this.watchers.values()) w.notify('live');
-      }
       this.ingest(String(event.data));
     });
 
@@ -189,9 +188,13 @@ export class MarketFeed {
 
   private retry(): void {
     if (this.watchers.size === 0) return;
+    if(this.retryTimer!==null)return;
+    this.close();
+    for(const w of this.watchers.values())w.notify('stale');
     const wait = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)] ?? 30_000;
     this.attempt += 1;
-    setTimeout(() => {
+    this.retryTimer=setTimeout(() => {
+      this.retryTimer=null;
       if (this.watchers.size === 0) return;
       // A reconnect re-subscribes, and the venue answers with a full `book` per
       // token. So the gap closes itself: we never resume from a book that went
@@ -215,6 +218,8 @@ export class MarketFeed {
   }
 
   private close(): void {
+    if(this.retryTimer!==null){clearTimeout(this.retryTimer);this.retryTimer=null;}
+    if(this.watchers.size===0){this.resubscribe?.cancel();if(this.staleTimer!==null)clearInterval(this.staleTimer);this.staleTimer=null;}
     if (this.ping !== null) {
       clearInterval(this.ping);
       this.ping = null;
@@ -245,6 +250,19 @@ export class MarketFeed {
     const frames: Frame[] = Array.isArray(parsed) ? (parsed as Frame[]) : [parsed as Frame];
 
     for (const frame of frames) {
+      if(frame?.event_type==='price_change'&&Array.isArray(frame.price_changes)){
+        const changed=new Map<string,ClobBook>();
+        for(const raw of frame.price_changes){
+          const c=raw as Record<string,unknown>;
+          if(!c||typeof c.asset_id!=='string'||typeof c.price!=='string'||typeof c.size!=='string'||!['BUY','SELL'].includes(String(c.side)))continue;
+          const price=Number(c.price),size=Number(c.size);
+          if(!Number.isFinite(price)||price<0||price>1||!Number.isFinite(size)||size<0)continue;
+          const book=changed.get(c.asset_id)??this.books.get(c.asset_id);
+          if(book)changed.set(c.asset_id,applyChange(book,{price:c.price,size:c.size,side:String(c.side)}));
+        }
+        for(const book of changed.values())this.observe(book);
+        continue;
+      }
       if (typeof frame?.asset_id !== 'string') continue;
       const assetId = frame.asset_id;
 
@@ -276,10 +294,18 @@ export class MarketFeed {
   }
 
   private observe(next: ClobBook): void {
+    if([...next.asks,...next.bids].some(l=>!Number.isFinite(l.priceMicros)||l.priceMicros<0||l.priceMicros>1_000_000||!Number.isFinite(l.size)||l.size<0))return;
+    next={...next,asks:next.asks.filter(l=>l.size>0),bids:next.bids.filter(l=>l.size>0)};
+    this.announcedStale=false;
     const previous = this.books.get(next.assetId);
     this.books.set(next.assetId, next);
 
     for (const watcher of this.watchers.values()) {
+      if(watcher.watch.eligibleTokens.includes(next.assetId)){
+        watcher.notify('live');
+        if(!previous||previous.asks[0]?.priceMicros!==next.asks[0]?.priceMicros)
+          watcher.marketPrice?.(next.assetId,next.asks[0]?next.asks[0].priceMicros/1_000_000:null,Date.now());
+      }
       const verdict = assess(watcher.watch, previous, next);
       if (!verdict.resolve) continue;
       this.schedule(watcher.id, verdict.reason);
@@ -290,7 +316,7 @@ export class MarketFeed {
     this.reasons.set(id, reason);
     let timer = this.pending.get(id);
     if (timer === undefined) {
-      timer = debounce(() => this.run(id), DEBOUNCE_MS);
+      timer = debounce(() => this.run(id), DEBOUNCE_MS,1500);
       this.pending.set(id, timer);
     }
     timer.fire();
@@ -298,7 +324,7 @@ export class MarketFeed {
 
   private run(id: string): void {
     if (!this.watchers.has(id)) return;
-    if (this.inFlight >= MAX_CONCURRENT_SOLVES) {
+    if (this.solving.has(id)||this.inFlight >= MAX_CONCURRENT_SOLVES) {
       // Queue rather than pile up: an unbounded fan-out of solves on a busy
       // book would starve the request path that people are actually waiting on.
       if (!this.queue.includes(id)) this.queue.push(id);
@@ -308,6 +334,7 @@ export class MarketFeed {
     if (watcher === undefined) return;
 
     this.inFlight += 1;
+    this.solving.add(id);
     const reason = this.reasons.get(id) ?? 'book moved';
     this.reasons.delete(id);
 
@@ -320,6 +347,7 @@ export class MarketFeed {
       })
       .finally(() => {
         this.inFlight -= 1;
+        this.solving.delete(id);
         const nextId = this.queue.shift();
         if (nextId !== undefined) this.run(nextId);
       });
