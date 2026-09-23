@@ -2,7 +2,7 @@ import { findNumbers } from '../../packages/intake/src/parse.js';
 import { expect, it } from 'vitest';
 import { exampleDraft } from '../../apps/web/lib/studio-examples.js';
 import { field, newDraft, quoteFromDraft, readDraft, reply, sealDraft, setField } from '../../apps/web/lib/studio-draft.js';
-import { heldCoins, holdingLoss } from '../../apps/web/lib/studio-input.js';
+import { holdingLoss } from '../../apps/web/lib/studio-input.js';
 import { describeExposure, productHelp, updateDraft, type StudioIntakeDeps } from '../../apps/web/lib/studio-intake.js';
 import { eventListings, exposureListings } from '../../apps/web/lib/event-listings.js';
 import { eventSupport, type GammaEvent } from '../../packages/venue/src/index.js';
@@ -37,10 +37,7 @@ it('complete examples bind real event rules and build all supported shape types 
   expect(btc.shape).toEqual({templateId:'linear_strip',direction:'below',k1:64000,k2:68000,payoutUsd:8000});
 });
 
-it('reads a coin holding and turns it into a gradual loss', () => {
-  expect(heldCoins('I hold 2 BTC and would lose $8,000 if it falls below $77,000')).toEqual({quantity:2,coin:'BTC'});
-  expect(heldCoins('10 SOL holdings')).toEqual({quantity:10,coin:'SOL'});
-  expect(heldCoins('I have 2 kids and a mortgage')).toBeNull();
+it('constructs a gradual holding loss from a known ramp endpoint', () => {
   expect(holdingLoss({quantity:2,coin:'BTC'},'below',77000,8000)).toEqual({
     shape:{templateId:'linear_strip',direction:'below',k1:77000,k2:81000,payoutUsd:8000},
     trigger:'BTC below $81,000: loss grows $2 per $1 fall, reaching $8,000 at $77,000'});
@@ -150,4 +147,34 @@ it('offers weather conditions without inventing a threshold, date or loss',async
   expect(next.fields.find(f=>f.key==='budgetUsd')?.value).toBe('500');
   const custom=await updateDraft(next,'trigger','Strong winds',deps);
   expect(custom.fields.find(f=>f.key==='trigger')?.value).toBe('Strong winds');
+});
+
+import { holdingCandidates, withHoldingQuestions, interpretHolding } from '../../apps/web/lib/studio-semantics.js';
+import type { Answer } from '../../packages/questions/src/types.js';
+const choice = (value:string,confidence=.99):Answer => ({kind:'choice',choice:value,confidence,probabilities:{[value]:confidence}});
+it('batches holding semantics into extraction and keeps ambiguous loss shapes blocked until a user chooses',async()=>{
+  let calls=0,reading:Parameters<typeof interpretHolding>[2];
+  const engine=withHoldingQuestions({ask:async(_state,questions)=>{
+    calls++;expect(questions.holdingQuantity?.kind).toBe('choice');expect(questions.holdingMeaning?.kind).toBe('choice');
+    return {modelVersion:'test',answers:{holdingQuantity:choice('h0'),holdingMeaning:choice('unclear')}};
+  }},r=>{reading=r;});
+  await engine.ask('My portfolio contains 2 BTC. I lose $8000 below $77000.',{lossDirection:{kind:'choice',instructions:'Direction',criteria:{below:'Below'}}});
+  expect(calls).toBe(1);
+  expect(holdingCandidates('My portfolio contains 1,200.5 ETH; not $500 BTC.')).toEqual([{quantity:1200.5,coin:'ETH'}]);
+  const draft=()=>{const d=exampleDraft('btc',event('numeric'))!;d.request!.shape={templateId:'threshold_digital',direction:'below',k:77000,payoutUsd:8000};return d;};
+  for(const [meaning,k1,k2] of [['starts',73000,77000],['reaches',77000,81000]] as const){
+    const d=draft();interpretHolding(d,'Bitcoin price?',reading);
+    expect(reply(d).question?.key).toBe('holdingMeaning');expect(()=>quoteFromDraft(d)).toThrow(/complete/);
+    await updateDraft(d,'holdingMeaning',meaning,deps);
+    expect(d.request!.shape).toMatchObject({templateId:'linear_strip',k1,k2,payoutUsd:8000});
+    expect(reply(d).ready).toBe(true);
+  }
+  const fixed=draft();interpretHolding(fixed,'Bitcoin price?',reading);await updateDraft(fixed,'holdingMeaning','fixed',deps);
+  expect(fixed.request!.shape.templateId).toBe('threshold_digital');
+  const uncertain=draft();interpretHolding(uncertain,'Bitcoin price?',{...reading!,answers:{holdingQuantity:choice('h0',.5)}});
+  expect(reply(uncertain).question?.key).toBe('holdingQuantity');
+  await updateDraft(uncertain,'holdingQuantity','none',deps);expect(uncertain.request!.shape.templateId).toBe('threshold_digital');
+  const otherAsset=draft();interpretHolding(otherAsset,'Ethereum price?',reading);expect(otherAsset.pending).toBeUndefined();
+  const inferred=draft();interpretHolding(inferred,'Bitcoin price?',{...reading!,answers:{holdingQuantity:choice('h0'),holdingMeaning:choice('reaches')}});
+  expect(inferred.fields.find(f=>f.key==='trigger')?.status).toBe('inferred');expect(reply(inferred).ready).toBe(false);
 });

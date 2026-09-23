@@ -1,4 +1,5 @@
-import { exposureSummary, heldCoins, holdingLoss, labeledAmounts } from './studio-input.js';
+import { withHoldingQuestions, interpretHolding, selectHolding, applyHoldingMeaning, type HoldingReading } from './studio-semantics.js';
+import { exposureSummary, labeledAmounts } from './studio-input.js';
 import { createJevEngine, type Question, type QuestionEngine } from '@polyhedge/questions';
 import { candidatesForText, findNumbers, intake, parseDeadline, type IntakeDeps, type TypedExposure } from '@polyhedge/intake';
 import { eventSupport, type GammaEvent } from '@polyhedge/venue';
@@ -58,7 +59,8 @@ export async function describeExposure(text:string,deps:StudioIntakeDeps,previou
   const numericMatch=preferred?events.some(e=>e.eventId===preferred.eventId):false;
   if((d.numeric||numericMatch)&&candidatesForText(d.description,events).length>0) {
     const never=async():Promise<never>=>{throw new Error('Preparation must not read books or solve');};
-    const intakeDeps:IntakeDeps={engine:deps.engine,events,today:deps.today,newSessionId:()=>crypto.randomUUID(),
+    let holdingReading:HoldingReading|undefined;
+    const intakeDeps:IntakeDeps={engine:withHoldingQuestions(deps.engine,reading=>{holdingReading=reading;}),events,today:deps.today,newSessionId:()=>crypto.randomUUID(),
       resolutionTextFor:id=>deps.index.resolutionText.get(id)??'',bracketLabelsFor:id=>deps.index.bracketLabels.get(id)??[],
       fetchEvent:deps.fetchEvent,fetchBooks:never,saveSnapshot:never,combinedShape:true,prepareOnly:true,
       protectionGoal:{kind:'minimize_net_loss'},execution:{quantityStep:.01}};
@@ -78,10 +80,10 @@ export async function describeExposure(text:string,deps:StudioIntakeDeps,previou
       if(!support.eligible||!familyEnabled('numeric'))throw new Error('unavailable: This numeric event is not currently available.');
       d.event={id:gamma.id,selection,support};
       d.request={...result.request,selection,ruleHash:support.ruleHash};
-      asHolding(d,support.title);
       d.options=result.options;
       d.assumptions=result.assumptions.filter(a=>!a.startsWith('Assumed you want to cover the full'));
       delete d.numeric;delete d.pending;
+      interpretHolding(d,support.title,holdingReading);
       return d;
     }
     if(result.kind==='declined')throw new Error(`unavailable: ${result.reason}`);
@@ -90,24 +92,6 @@ export async function describeExposure(text:string,deps:StudioIntakeDeps,previou
   }
   delete d.numeric;
   return prepareEvent(d,deps);
-}
-/**
- * "I hold 2 BTC and lose $8,000 below $77,000" is a loss that grows as the price
- * falls, not one that appears in full at $77,000. When the text names a coin
- * holding of the event's own asset, the one-level target becomes that gradual
- * loss, and the reading is shown for confirmation because it is an inference.
- */
-function asHolding(d:StudioDraft,eventTitle:string) {
-  const held=heldCoins(d.description),shape=d.request?.shape;
-  if(!held||!shape||(shape.templateId!=='threshold_digital'&&shape.templateId!=='tail_only'))return;
-  const aliases:Record<string,string>={btc:'bitcoin',eth:'ethereum',ether:'ethereum',sol:'solana',doge:'dogecoin'};
-  const coin=held.coin.toLowerCase();
-  if(!new RegExp(`\\b(${coin}|${aliases[coin]??coin})\\b`,'i').test(eventTitle))return;
-  try {
-    const holding=holdingLoss(held,shape.direction,shape.k,shape.payoutUsd);
-    d.request!.shape=holding.shape;
-    setField(d,'trigger',holding.trigger,'inferred');
-  } catch { /* A layer outside the price domain stays a one-level target. */ }
 }
 async function prepareEvent(d:StudioDraft,deps:StudioIntakeDeps):Promise<StudioDraft> {
   setField(d,'exposure',exposureSummary(d.description));
@@ -164,6 +148,8 @@ function finishOutcomeMapping(d:StudioDraft) {
 }
 export async function updateDraft(d:StudioDraft,key:string,value:string,deps:StudioIntakeDeps):Promise<StudioDraft> {
   const text=value.trim();if(!text||text.length>2000)throw new Error('bad_request: enter a valid answer');
+  if(key==='holdingQuantity'){selectHolding(d,text);return d;}
+  if(key==='holdingMeaning'){applyHoldingMeaning(d,text,true);return d;}
   if(key==='eventCondition')return updateDraft(d,'trigger',text,deps);
   if(key==='eventDate')return updateDraft(d,'deadline',text,deps);
   if(key==='eventSubject'){d.description+=` My specific exposure is ${text}.`;delete d.pending;return describeExposure(d.description,deps);}
