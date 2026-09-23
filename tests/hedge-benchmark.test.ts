@@ -60,3 +60,19 @@ it('rejects malformed books instead of producing credible-looking results', asyn
     { priceMicros: priceMicros(200_000), size: 10 },
   ]] }, current)).rejects.toThrow('invalid asks');
 });
+
+it('actually exercises expected-cost selection and exposes the risk of incorrect odds',async()=>{
+  const {scenarios}=await import('../examples/hedge-benchmark/scenarios.js');
+  const scenario=scenarios().find(s=>s.id==='competing-complements')!;
+  const old=await evaluate(scenario,policies.find(p=>p.id==='premium-aware')!,1);
+  const policy=policies.find(p=>p.id==='market-expected')!;
+  const next=await evaluate(scenario,policy,1);
+  expect(next.quoted.worstNetLossUsd).toBeCloseTo(old.quoted.worstNetLossUsd,5);
+  // Both complementary legs have negative implied net cost. Clipping them to
+  // zero would erase the preference for the one with larger expected payout.
+  expect(next.legs.find(l=>l.id==='high-NO')!.shares).toBeCloseTo(100,4);
+  expect(next.marketImpliedNetCostUsd).toBeCloseTo(-35,4);
+  const wrong=await evaluate(scenarios().find(s=>s.id.endsWith('/wrong-odds'))!,policy,1);
+  expect(wrong.legs).toEqual(next.legs);
+  expect(wrong.evaluationNetCostUsd).toBeGreaterThan(0);
+});

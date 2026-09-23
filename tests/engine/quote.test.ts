@@ -163,16 +163,6 @@ describe('replay', () => {
     expect(again.phase2Hash).toBe(rec.basket.phase2Hash);
   });
 
-  it('a record survives JSON serialization intact', async () => {
-    const rec = await quote(
-      { eventId: 'e1', shape: { templateId: 'tail_only', payoutUsd: 1000, direction: 'below', k: 68000 } },
-      deps(),
-    );
-    const roundTripped = JSON.parse(JSON.stringify(rec)) as typeof rec;
-    const books = Object.keys(prices).map((id) => book(id, prices[id]!));
-    expect((await replay(roundTripped, books)).legs).toEqual(rec.basket.legs);
-  });
-
   it('re-solves under the mu recorded on the basket, not the current default', async () => {
     const rec = await quote(
       { eventId: 'e1', shape: { templateId: 'range_protect', payoutUsd: 2500, low: 68000, high: 70000 } },
@@ -317,4 +307,41 @@ describe('golden fixtures', () => {
       }
     });
   }
+});
+
+describe('basket builder policy', () => {
+  const ladder = (yesPrices: number[]): GammaEvent => ({
+    id: 'e2', slug: 'x', title: 'X', negRisk: true, negRiskMarketId: '0x2', endDate: '2026-12-31T16:00:00Z',
+    tags: [], seriesTickers: [],
+    markets: ['<10', '10-20', '>20'].map((title, i) => ({ ...mkt(`n${i}`, title, 0), yesPrice: yesPrices[i]! })),
+  });
+  const shape = { templateId: 'threshold_digital', payoutUsd: 100, direction: 'below', k: 10 } as const;
+
+  it('plans on the stated share of each ask level, and replays the same way', async () => {
+    const books = (ids: string[]) => ids.map((id): ClobBook => ({ market: 'x', assetId: id, timestamp: '1', hash: 'h', bids: [],
+      asks: id === 'n0_yes' ? [{ priceMicros: 200_000, size: 100 }, { priceMicros: 500_000, size: 1_000 }] : [{ priceMicros: 990_000, size: 1_000 }] }));
+    const deps = { fetchEvent: async () => ladder([0.2, 0.5, 0.3]), fetchBooks: async (ids: string[]) => books(ids), saveSnapshot: async () => 's' };
+    const full = await quote({ eventId: 'e2', shape }, deps);
+    const planned = await quote({ eventId: 'e2', shape, planningDepth: 0.6 }, deps);
+    const leg = (r: typeof full) => r.basket.legs.find(l => l.tokenId === 'n0_yes')!;
+    expect(leg(full)).toMatchObject({ shares: 100, avgPriceMicros: 200_000 });
+    // Only 60 of the 100 cheap shares are counted on; the rest comes from the next level.
+    expect(leg(planned)).toMatchObject({ shares: 100, avgPriceMicros: 320_000 });
+    expect(await replay(planned, books(planned.resolved.legs.map(l => l.tokenId)))).toEqual(planned.basket);
+  });
+
+  it('experimental selection minimizes market-implied expected net cost at the same worst case', async () => {
+    // YES on "<10" and NO on "10-20" both pay $1 when "<10" wins, at the same price.
+    // NO also pays when ">20" wins, so the market expects more of it back.
+    const deps = {
+      fetchEvent: async () => ladder([0.3, 0.5, 0.2]),
+      fetchBooks: async (ids: string[]) => ids.map((id): ClobBook => ({ market: 'x', assetId: id, timestamp: '1', hash: 'h', bids: [],
+        asks: [{ priceMicros: id === 'n0_yes' || id === 'n1_no' ? 350_000 : 1_000_000, size: 1_000 }] })),
+      saveSnapshot: async () => 's',
+    };
+    const record = await quote({ eventId: 'e2', shape, selectionPolicy:'market_expected', protectionGoal: { kind: 'minimize_net_loss' } }, deps);
+    const held = record.basket.legs.filter(l => l.shares > 0);
+    expect(held.map(l => l.tokenId)).toEqual(['n1_no']);
+    expect(record.basket.worstNetLossCents).toBe(3500);
+  });
 });

@@ -22,9 +22,10 @@ const shapes: [string, TargetShape][] = [
 
 /** Deliberately synthetic, not calibrated probabilities or historical observations. */
 export function scenarios(): Scenario[] {
-  return shapes.flatMap(([name, shape]) => [10, 30, 80].flatMap(budgetUsd =>
+  const base=shapes.flatMap(([name, shape]) => [10, 30, 80].flatMap(budgetUsd =>
     (['deep', 'thin', 'expensive'] as const).map(liquidity => ({
       id: `${name}/${liquidity}/budget-${budgetUsd}`, items, shape, budgetUsd, legs,
+      stateProbabilities:{low:.2/1.1,middle:.65/1.1,high:.25/1.1},
       // Middle NO can cover both tails: exercise complements, not only YES ladders.
       books: [0.2, 0.85, 0.65, 0.38, 0.25, 0.8].map(p => [
         { priceMicros: priceMicros(Math.round((p + (liquidity === 'expensive' ? 0.05 : 0)) * 1e6)),
@@ -35,4 +36,8 @@ export function scenarios(): Scenario[] {
       feeRates: legs.map(() => 0.02),
     })),
   ));
+  const competing:Scenario={id:'competing-complements',items,shape:shapes[0]![1],budgetUsd:35,legs,
+    books:legs.map(l=>[{priceMicros:priceMicros(l.side==='NO'&&l.tradableKey!=='low'?350_000:990_000),size:1000}]),feeRates:legs.map(()=>0),
+    stateProbabilities:{low:.1,middle:.6,high:.3}};
+  return [...base,competing,{...competing,id:'competing-complements/wrong-odds',evaluationProbabilities:{low:.1,middle:.1,high:.8}}];
 }

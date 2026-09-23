@@ -48,6 +48,8 @@ export interface BuildBasketArgs {
   mu?: number;
   protectionGoal?: ProtectionGoal;
   execution?: ExecutionConstraints;
+  /** Market-expected payout per share of each leg; see `LpInput.expectedPayouts`. */
+  expectedPayouts?: number[];
   /** Test-only override, used to exercise the validator. */
   forceSharesForTest?: number[];
 }
@@ -80,6 +82,7 @@ export async function buildBasket(args: BuildBasketArgs): Promise<Basket> {
   const lex = await solveLexicographic(
     { target, matrix, books, feeRates, mu, budgetCents,
       ...(args.protectionGoal ? { protectionGoal: args.protectionGoal } : {}),
+      ...(args.expectedPayouts ? { expectedPayouts: args.expectedPayouts } : {}),
       ...(execution ? { execution } : {}) }, budgetCents,
   );
 

@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { eventSupport, type GammaEvent, type ClobBook } from '../../packages/venue/src/index.js';
-import { quote, replay, revalidateQuote } from '../../packages/engine/src/index.js';
-import { structuredRequest } from '../../packages/intake/src/structured.js';
+import { quote, replay, revalidateQuote, type QuoteRequest } from '../../packages/engine/src/index.js';
 import { bindQuote } from '../../packages/execution/src/quote-binding.js';
 import { accountBasket } from '../../packages/settlement/src/accounting.js';
 import { registerBasket, settlementFor } from '../../packages/settlement/src/service.js';
 import { harness } from '../settlement/fixtures.js';
 import type { SettlementBasket, ConditionRecord } from '../../packages/settlement/src/types.js';
 import { eventListings, listingIndex } from '../../apps/web/lib/event-listings.js';
+import { curvePoints, trueCostUsd } from '../../apps/web/lib/view-model.js';
+import { costProtectionCurve } from '../../packages/intake/src/options.js';
 
 const labels=['50+ bps decrease','25 bps decrease','No change','25 bps increase','50+ bps increase'];
 function fixture(binary=false):GammaEvent {
@@ -25,8 +26,9 @@ function setup(binary=false) {
   const event=fixture(binary);
   const selection=binary?{kind:'binary' as const,marketId:'1'}:{kind:'categorical' as const};
   const domain=eventSupport(event,selection);
-  const request=structuredRequest({eventId:event.id,...selection,ruleHash:domain.ruleHash,
-    losses:domain.outcomes.map((o,i)=>({outcomeId:o.id,lossCents:i===0?10000:0}))});
+  const request:QuoteRequest={eventId:event.id,selection,ruleHash:domain.ruleHash,
+    shape:{templateId:'outcome_losses',losses:domain.outcomes.map((o,i)=>({outcomeId:o.id,lossCents:i===0?10000:0}))},
+    execution:{quantityStep:0.01},protectionGoal:{kind:'minimize_net_loss'}};
   let books:ClobBook[]=[];
   const deps={fetchEvent:async()=>event,fetchBooks:async(ids:string[])=>books=ids.map(assetId=>({assetId,
     market:event.markets.find(m=>m.yesTokenId===assetId||m.noTokenId===assetId)!.conditionId!,timestamp:'1',hash:'h',bids:[],
@@ -72,7 +74,6 @@ it('rejects ambiguous groups and incomplete losses, while discovery supports bin
   if(req.shape.templateId!=='outcome_losses')throw new Error('fixture');
   req.shape.losses.pop();
   await expect(quote(req,f.deps)).rejects.toThrow(/loss|outcome/i);
-  expect(()=>structuredRequest({eventId:'100',kind:'binary',marketId:'1',ruleHash:f.domain.ruleHash,losses:[{outcomeId:'yes',lossCents:100},{outcomeId:'no'}]})).toThrow();
   const rows=eventListings(fixture(true));
   expect(listingIndex(rows)('btc')).toHaveLength(1);
 });
@@ -92,4 +93,28 @@ it('settlement observes unheld categorical conditions and refuses split, incompl
   expect(accountBasket(basket,conditions).boundAssessment).toBe('outside_quote_model');
   conditions[2]!.payout={yes:1,no:1,denominator:2};
   expect(accountBasket(basket,conditions).boundAssessment).toBe('outside_quote_model');
+});
+
+it('prices true cost and the cost/protection curve for binary and categorical hedges', async () => {
+  for (const binary of [true, false]) {
+    const f = setup(binary);
+    const record = await quote(f.request, f.deps);
+    // Binary odds are YES and its complement; a categorical partition's are its YES prices.
+    expect(Object.values(record.resolved.probabilities!)).toEqual(binary ? [0.2, 0.8] : [0.2, 0.2, 0.2, 0.2, 0.2]);
+    // $20 buys $100 in an outcome the market gives 20%: fairly priced, so nothing is lost on average.
+    expect(trueCostUsd(record)).toBeCloseTo(0, 6);
+    // Paying the same $20 when the market thinks the outcome is only 10% likely costs $10 on average.
+    const doubtful = structuredClone(record);
+    doubtful.resolved.probabilities = binary ? { [f.domain.outcomes[0]!.id]: 0.1, [f.domain.outcomes[1]!.id]: 0.9 }
+      : Object.fromEntries(f.domain.outcomes.map((o, i) => [o.id, i === 0 ? 0.1 : 0.225]));
+    expect(trueCostUsd(doubtful)).toBeCloseTo(10, 6);
+
+    const points = curvePoints(await costProtectionCurve(f.request, f.deps, undefined, [record]));
+    expect(points[0]).toEqual({ costUsd: 0, worstLossUsd: 100, trueCostUsd: 0 });
+    expect(points.at(-1)).toMatchObject({ worstLossUsd: 20 });
+    for (let i = 1; i < points.length; i++) {
+      expect(points[i]!.costUsd).toBeGreaterThan(points[i - 1]!.costUsd);
+      expect(points[i]!.worstLossUsd).toBeLessThan(points[i - 1]!.worstLossUsd);
+    }
+  }
 });

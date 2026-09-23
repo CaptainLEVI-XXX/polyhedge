@@ -12,6 +12,8 @@ export interface Scenario {
   legs: Leg[];
   books: BookLevel[][];
   feeRates: number[];
+  stateProbabilities?:Record<string,number>;
+  evaluationProbabilities?:Record<string,number>;
 }
 
 export interface Policy {
@@ -21,11 +23,15 @@ export interface Policy {
   /** Reduce visible depth BEFORE constructing the basket. */
   planningDepth: number;
   protectionGoal?: ProtectionGoal;
+  marketExpected?:boolean;
   execution?: { quantityStep: number; minShares: number; maxLegs?: number };
 }
 
 export const policies: Policy[] = [
   { id: 'unhedged', sides: 'none', mu: 0.001, planningDepth: 1 },
+  {id:'market-expected',sides:'both',mu:0,planningDepth:1,marketExpected:true,protectionGoal:{kind:'minimize_net_loss'}},
+  {id:'market-expected-buffered',sides:'both',mu:0,planningDepth:.6,marketExpected:true,protectionGoal:{kind:'minimize_net_loss'}},
+
   { id: 'yes-only', sides: 'yes', mu: 0.001, planningDepth: 1 },
   { id: 'current', sides: 'both', mu: 0.001, planningDepth: 1 },
   { id: 'depth-buffer', sides: 'both', mu: 0.001, planningDepth: 0.5 },
@@ -86,6 +92,7 @@ export async function evaluate(scenario: Scenario, policy: Policy, executionDept
   const basket = legs.length ? await buildBasket({
     shape: scenario.shape, stateSpace, legs,
     books: books.map(book => book.map(l => ({ ...l, size: l.size * policy.planningDepth }))),
+    ...(policy.marketExpected&&scenario.stateProbabilities?{expectedPayouts:legs.map(l=>l.side==='YES'?scenario.stateProbabilities![l.tradableKey]!:1-scenario.stateProbabilities![l.tradableKey]!)}:{}),
     feeRates: fees, budgetCents: dollarsToCents(scenario.budgetUsd), mu: policy.mu,
     ruleFlags: [], correlationResidual: false,
     ...(policy.protectionGoal ? { protectionGoal: policy.protectionGoal } : {}),
@@ -118,7 +125,10 @@ export async function evaluate(scenario: Scenario, policy: Policy, executionDept
     return quantity;
   });
   const complete = shares.every((q, j) => Math.abs(q - filled[j]!) <= 1e-6);
+  const expectedNetCost=(odds:Record<string,number>|undefined)=>odds?((basket?.totalCostCents??0)/100-shares.reduce((sum,q,j)=>sum+q*(legs[j]!.side==='YES'?odds[legs[j]!.tradableKey]!:1-odds[legs[j]!.tradableKey]!),0)):null;
   return {
+    marketImpliedNetCostUsd:expectedNetCost(scenario.stateProbabilities),
+    evaluationNetCostUsd:expectedNetCost(scenario.evaluationProbabilities??scenario.stateProbabilities),
     scenario: scenario.id, policy: policy.id, budgetUsd: scenario.budgetUsd,
     quoted: metrics(target, payouts(shares), (basket?.totalCostCents ?? 0) / 100, shares),
     stressed: metrics(target, payouts(filled), dollarsToCents(stressedCost) / 100, filled),

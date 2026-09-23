@@ -15,6 +15,9 @@ export interface LpInput {
   /** Optional premium-aware policy; absence preserves the original compiler. */
   protectionGoal?: ProtectionGoal;
   execution?: ExecutionConstraints;
+  /** Market-expected payout per share of each leg, in dollars. When given, a
+   *  minimize-net-loss solve spends its tie-break on true cost, not premium. */
+  expectedPayouts?: number[];
 }
 
 export interface ExecutionConstraints {
@@ -30,7 +33,7 @@ export type ProtectionGoal =
 
 export type Phase =
   | { kind: 'minimax' }
-  | { kind: 'cost'; maxShortfallDollars: number };
+  | { kind: 'cost'; maxShortfallDollars: number; premiumOnly?:boolean; expectedCostCap?:number };
 
 export interface LpModel {
   text: string;
@@ -80,13 +83,23 @@ export function buildLpModel(input: LpInput, phase: Phase): LpModel {
       for (let t = 0; t < nStates; t += 1) { obj.push(term(EPSILON * idx, `o_${t}`)); idx += 1; }
     }
   } else {
+    // Phase 1 already fixed the worst case. Among baskets that meet it, the
+    // lowest market-implied expected net cost (premium minus expected payout)
+    // is the better hedge; premium alone can prefer a basket that is cheaper
+    // today but loses more on average.
+    const byTrueCost = input.protectionGoal?.kind === 'minimize_net_loss' && input.expectedPayouts !== undefined && !phase.premiumOnly;
     for (const v of legLevelVars) {
-      obj.push(term(cost(v.leg, v.level) + (input.protectionGoal ? 0 : EPSILON * idx), v.name));
+      const premium = cost(v.leg, v.level);
+      obj.push(term(byTrueCost
+        ? premium - input.expectedPayouts![v.leg]!
+        : premium + (input.protectionGoal ? 0 : EPSILON * idx), v.name));
       idx += 1;
     }
     for (let t = 0; t < nStates; t += 1) { obj.push(term(mu + (input.protectionGoal ? 0 : EPSILON * idx), `o_${t}`)); idx += 1; }
   }
 
+  if(input.expectedPayouts && (input.expectedPayouts.length!==nLegs||input.expectedPayouts.some(p=>!Number.isFinite(p)||p<0||p>1)))throw Error('Invalid expected payouts');
+  if(input.expectedPayouts && input.protectionGoal?.kind==='minimize_net_loss' && mu!==0)throw Error('Expected-cost selection requires mu = 0');
   const lines: string[] = ['\\ polyhedge lp v2', 'Minimize', ` obj: ${join(obj)}`, 'Subject To'];
 
   for (let t = 0; t < nStates; t += 1) {
@@ -114,6 +127,11 @@ export function buildLpModel(input: LpInput, phase: Phase): LpModel {
     for (let t = 0; t < nStates; t += 1) {
       lines.push(` cap_${t}: ${join(riskTerms(t))} <= ${fmt(phase.maxShortfallDollars)}`);
     }
+  }
+
+  if(phase.kind==='cost'&&phase.expectedCostCap!==undefined){
+    const parts=legLevelVars.map(v=>term(cost(v.leg,v.level)-input.expectedPayouts![v.leg]!,v.name));
+    lines.push(` expected_cost: ${join(parts)} <= ${fmt(phase.expectedCostCap)}`);
   }
 
   if (budgetCents !== null) {

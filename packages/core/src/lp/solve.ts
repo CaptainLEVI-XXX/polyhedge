@@ -114,12 +114,19 @@ export async function solveLexicographic(
     kind: 'cost',
     maxShortfallDollars: maxShortfallDollars + SHORTFALL_TOLERANCE,
   });
-  const r2 = await solveLp(phase2, 'cost');
+  let r2 = await solveLp(phase2, 'cost');
+  let finalHash=phase2.hash;
+  if(input.protectionGoal?.kind==='minimize_net_loss'&&input.expectedPayouts){
+    // A separate final priority avoids buying extra holdings merely to break
+    // ties, without distorting the expected-cost objective with a weight.
+    const final=buildLpModel(withBudget,{kind:'cost',maxShortfallDollars:maxShortfallDollars+SHORTFALL_TOLERANCE,premiumOnly:true,expectedCostCap:r2.objective+SHORTFALL_TOLERANCE});
+    r2=await solveLp(final,'premium tie-break');finalHash=final.hash;
+  }
 
   return {
     solution: r2,
     maxShortfallDollars,
     phase1Hash: phase1.hash,
-    phase2Hash: phase2.hash,
+    phase2Hash: finalHash,
   };
 }

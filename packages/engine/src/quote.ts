@@ -20,6 +20,13 @@ export interface QuoteRequest {
   /** Over-hedge penalty override, e.g. to request a "shaped" alternative solve. */
   mu?: number;
   protectionGoal?: ProtectionGoal;
+  /**
+   * Share of each displayed ask level the basket may plan on, in (0, 1]. Books
+   * move between quote and fill; sizing to all of it invites partial fills.
+   */
+  planningDepth?: number;
+  /** Experimental expected-cost tie-break; premium is the default. */
+  selectionPolicy?: 'premium' | 'market_expected';
   /** Use venue minimum sizes and the execution adapter's quantity precision. */
   execution?: { quantityStep: number; maxLegs?: number };
   /**
@@ -51,6 +58,9 @@ export interface QuoteRecord {
     legs: Leg[];
     feeRates: number[];
     snapshotId: string;
+    /** Venue-displayed chance of each tradable state, normalised to sum to one.
+     *  Market data, not evidence: never part of the evidence hash. */
+    probabilities?: Record<string, number>;
   };
   basket: Basket;
   meta: QuoteMeta;
@@ -74,8 +84,16 @@ export interface QuoteOptions {
 }
 
 /** The only place venue's plain numbers become core's branded types. */
-function toCoreBook(book: ClobBook | undefined): BookLevel[] {
-  return (book?.asks ?? []).map((l) => ({ priceMicros: priceMicros(l.priceMicros), size: l.size }));
+function toCoreBook(book: ClobBook | undefined, planningDepth = 1): BookLevel[] {
+  if (!(planningDepth > 0 && planningDepth <= 1)) throw new Error('planningDepth must be in (0, 1]');
+  return (book?.asks ?? []).map((l) => ({ priceMicros: priceMicros(l.priceMicros), size: l.size * planningDepth }));
+}
+
+/** What one share of each leg pays on average at the market's own odds. */
+function expectedPayouts(legs: Leg[], probabilities: Record<string, number> | undefined) {
+  if(probabilities && (Object.values(probabilities).some(p=>!Number.isFinite(p)||p<0||p>1)||Math.abs(Object.values(probabilities).reduce((a,b)=>a+b,0)-1)>1e-6))throw Error('Invalid market probabilities');
+  if (!probabilities || legs.some(l => probabilities[l.tradableKey] === undefined)) return {};
+  return { expectedPayouts: legs.map(l => l.side === 'YES' ? probabilities[l.tradableKey]! : 1 - probabilities[l.tradableKey]!) };
 }
 
 function executionConstraints(request: QuoteRequest, legs: Leg[], byToken: Map<string, ClobBook>) {
@@ -187,12 +205,15 @@ export async function quote(
   const jevModelVersion = options?.jevModelVersion ?? 'unknown';
   const now = deps.now ?? (() => new Date());
 
+  const { probabilities } = probabilitiesFor(event, domain, items);
+
   checkDeadline();
   const basket = await buildBasket({
     shape: request.shape,
     stateSpace,
     legs,
-    books: legs.map((l) => toCoreBook(byToken.get(l.tokenId))),
+    books: legs.map((l) => toCoreBook(byToken.get(l.tokenId), request.planningDepth)),
+    ...(request.selectionPolicy==='market_expected'?expectedPayouts(legs, probabilities):{}),
     feeRates,
     budgetCents: request.budgetUsd === undefined ? null : dollarsToCents(request.budgetUsd),
     ruleFlags,
@@ -206,7 +227,8 @@ export async function quote(
   return {
     version: domain ? 2 : 1,
     request,
-    resolved: { ...(domain ? { domain, evidenceHash:evidenceHash({domain,items,legs,feeRates}) } : {}), items, legs, feeRates, snapshotId },
+    resolved: { ...(domain ? { domain, evidenceHash:evidenceHash({domain,items,legs,feeRates}) } : {}), items, legs, feeRates, snapshotId,
+      ...(probabilities ? { probabilities } : {}) },
     basket,
     meta: {
       quotedAt: now().toISOString(),
@@ -226,7 +248,8 @@ export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Ba
     shape: record.request.shape,
     stateSpace,
     legs: record.resolved.legs,
-    books: record.resolved.legs.map((l) => toCoreBook(byToken.get(l.tokenId))),
+    books: record.resolved.legs.map((l) => toCoreBook(byToken.get(l.tokenId), record.request.planningDepth)),
+    ...(record.request.selectionPolicy==='market_expected'?expectedPayouts(record.resolved.legs, record.resolved.probabilities):{}),
     feeRates: record.resolved.feeRates,
     budgetCents: record.request.budgetUsd === undefined
       ? null
@@ -237,6 +260,21 @@ export async function replay(record: QuoteRecord, books: ClobBook[]): Promise<Ba
     ...(record.request.protectionGoal ? { protectionGoal: record.request.protectionGoal } : {}),
     ...executionConstraints(record.request, record.resolved.legs, byToken),
   });
+}
+
+/**
+ * The market's own odds for each tradable state, from the venue's displayed
+ * YES prices. A binary market's NO outcome is the complement of its YES price.
+ * Normalised because a neg-risk ladder's prices rarely sum to exactly one.
+ */
+function probabilitiesFor(event: GammaEvent, domain: EventSupport | undefined, items: TradableItem[]): { probabilities?: Record<string, number> } {
+  const yesPrice = (marketId: string) => event.markets.find(m => m.id === marketId)?.yesPrice ?? NaN;
+  const raw: [string, number][] = domain && domain.kind !== 'numeric'
+    ? domain.outcomes.map(o => [o.id, o.side === 'YES' ? yesPrice(o.marketId) : 1 - yesPrice(o.marketId)])
+    : items.map(i => [i.key, yesPrice(i.key)]);
+  const sum = raw.reduce((total, [, p]) => total + p, 0);
+  if (raw.some(([, p]) => !Number.isFinite(p) || p < 0 || p > 1) || !(sum > 0)) return {};
+  return { probabilities: Object.fromEntries(raw.map(([key, p]) => [key, p / sum])) };
 }
 
 function evidenceHash(evidence: {domain: EventSupport;items:TradableItem[];legs:Leg[];feeRates:number[]}):string {

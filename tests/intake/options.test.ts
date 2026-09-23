@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildBasketOptions } from '../../packages/intake/src/options.js';
+import { buildBasketOptions, costProtectionCurve } from '../../packages/intake/src/options.js';
+import { curvePoints } from '../../apps/web/lib/view-model.js';
 import type { QuoteDeps, QuoteRequest } from '../../packages/engine/src/quote.js';
 import { quote } from '../../packages/engine/src/quote.js';
 import { quoteSession } from '../../packages/engine/src/quote-session.js';
@@ -113,4 +114,47 @@ describe('buildBasketOptions', () => {
       expect(option.record.resolved.snapshotId).toBe(primary.resolved.snapshotId);
     }
   });
+});
+
+describe('costProtectionCurve', () => {
+  it('runs from no hedge to the most protection, each step buying strictly more for more', async () => {
+    const prices: Record<string, number> = { mA_yes: 80_000, mB_yes: 150_000, mC_yes: 300_000, mD_yes: 500_000,
+      mA_no: 930_000, mB_no: 860_000, mC_no: 710_000, mD_no: 510_000 };
+    const deps: QuoteDeps = {
+      fetchEvent: async () => EVENT,
+      fetchBooks: async ids => ids.map(id => book(id, prices[id]!)),
+      saveSnapshot: async () => 'snap',
+    };
+    const request: QuoteRequest = { eventId: 'e1', budgetUsd: 300, protectionGoal: { kind: 'minimize_net_loss' },
+      shape: { templateId: 'threshold_digital', payoutUsd: 1000, direction: 'below', k: 64_000 } };
+
+    const records = await costProtectionCurve(request, deps);
+    // A ladder's displayed prices are normalised: four brackets at 20% become 25% each.
+    expect(Object.values(records[0]!.resolved.probabilities!)).toEqual([0.25, 0.25, 0.25, 0.25]);
+    // Every point ignores the budget, so the whole trade-off is visible.
+    expect(records.every(r => r.request.budgetUsd === undefined)).toBe(true);
+
+    const points = curvePoints(records);
+    expect(points[0]).toEqual({ costUsd: 0, worstLossUsd: 1000, trueCostUsd: 0 });
+    expect(points.length).toBeGreaterThan(3);
+    for (let i = 1; i < points.length; i++) {
+      expect(points[i]!.costUsd).toBeGreaterThan(points[i - 1]!.costUsd);
+      expect(points[i]!.worstLossUsd).toBeLessThan(points[i - 1]!.worstLossUsd);
+    }
+    const { budgetUsd: _budget, ...uncapped } = request;
+    const best = await quote(uncapped, deps);
+    expect(points.at(-1)!.worstLossUsd).toBeCloseTo(best.basket.worstNetLossCents! / 100, 2);
+  });
+});
+
+it('builds a stored curve from pinned books, fees and probabilities without fetching current metadata',async()=>{
+  let calls=0;const books=EVENT.markets.flatMap(m=>[book(m.yesTokenId,200000),book(m.noTokenId,800000)]);
+  const deps:QuoteDeps={fetchEvent:async()=>{calls++;return structuredClone(EVENT);},fetchBooks:async()=>books,saveSnapshot:async()=> 'pinned'};
+  const record=await quote({eventId:EVENT.id,shape:{templateId:'threshold_digital',payoutUsd:100,direction:'below',k:60000},budgetUsd:20,protectionGoal:{kind:'minimize_net_loss'}},deps);
+  const {pinnedCostProtectionCurve}=await import('../../packages/intake/src/options.js');
+  const points=await pinnedCostProtectionCurve(record,books);
+  expect(calls).toBe(1);
+  expect(points.length).toBeGreaterThan(1);
+  for(const point of points){expect(point.resolved).toEqual(record.resolved);expect(point.request.selectionPolicy).toBe('premium');}
+  await expect(pinnedCostProtectionCurve(record,books.slice(1))).rejects.toThrow('Incomplete pinned books');
 });
