@@ -1,4 +1,3 @@
-export const VERSION = '0.1.0';
 export * from './money.js';
 export * from './types.js';
 export * from './state-space.js';

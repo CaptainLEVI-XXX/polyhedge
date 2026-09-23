@@ -12,7 +12,8 @@
     "benchmark:hedge": "node --import tsx examples/hedge-benchmark.ts",
     "db:migrate": "node --import tsx examples/migrate.ts",
     "web": "pnpm --filter @polyhedge/web dev",
-    "verify:solver": "node apps/web/scripts/verify-solver.mjs"
+    "verify:solver": "node apps/web/scripts/verify-solver.mjs",
+    "benchmark:catalogue": "node --import tsx examples/catalogue-benchmark.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

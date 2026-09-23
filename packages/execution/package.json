@@ -6,7 +6,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@polyhedge/core": "workspace:*",
     "@polyhedge/engine": "workspace:*",
     "@polyhedge/venue": "workspace:*",
     "pg": "8.23.0",

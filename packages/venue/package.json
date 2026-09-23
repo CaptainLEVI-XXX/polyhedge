@@ -7,7 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@polyhedge/core": "workspace:*",
     "zod": "^4.6.5"
   }
 }

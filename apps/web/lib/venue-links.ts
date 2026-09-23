@@ -22,7 +22,3 @@ export function linkForMarket(event: GammaEvent | undefined, marketId: string): 
     ? `${VENUE}/event/${event.slug}/${market.slug}`
     : `${VENUE}/event/${event.slug}`;
 }
-
-export function linkForEvent(event: GammaEvent | undefined): string | null {
-  return event === undefined ? null : `${VENUE}/event/${event.slug}`;
-}

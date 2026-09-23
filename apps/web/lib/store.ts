@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadSnapshot, saveSnapshot, type ClobBook } from '@polyhedge/venue';
@@ -141,20 +141,4 @@ export async function acceptQuote(id: string, owner: string, optionId?: string):
   accepting.set(id, pending);
   try { return await pending; }
   finally { if (accepting.get(id) === pending) accepting.delete(id); }
-}
-
-/** Guards any write that is not the one-time accept. */
-export async function assertMutable(id: string, owner: string): Promise<StoredQuote> {
-  const stored = await getQuote(id, owner);
-  if (stored.acceptedAt !== null) throw new QuoteImmutable(id);
-  return stored;
-}
-
-/** Only used by the runtime check; not a product surface. */
-export async function countSnapshots(): Promise<number> {
-  try {
-    return (await readdir(SNAPSHOTS)).length;
-  } catch {
-    return 0;
-  }
 }

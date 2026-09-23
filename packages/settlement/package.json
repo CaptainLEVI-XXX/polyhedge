@@ -8,8 +8,6 @@
   "dependencies": {
     "@polyhedge/core": "workspace:*",
     "@polyhedge/engine": "workspace:*",
-    "@polyhedge/venue": "workspace:*",
-    "pg": "8.23.0",
     "@polymarket/client": "0.10.0",
     "viem": "^2.37.0",
     "@polyhedge/execution": "workspace:*",

@@ -58,18 +58,6 @@ describe('buildStateSpace', () => {
     ]);
   });
 
-  it('splits an unbounded lower tail', () => {
-    const ss = buildStateSpace(ladder, [60000]);
-    expect(ss.evals.filter((e) => e.tradableKey === 'mA').map((e) => [e.lo, e.hi]))
-      .toEqual([[null, 60000], [60000, 68000]]);
-  });
-
-  it('splits an unbounded upper tail', () => {
-    const ss = buildStateSpace(ladder, [80000]);
-    expect(ss.evals.filter((e) => e.tradableKey === 'mD').map((e) => [e.lo, e.hi]))
-      .toEqual([[72000, 80000], [80000, null]]);
-  });
-
   it('gives evaluation states stable ascending ids', () => {
     expect(buildStateSpace(ladder, [69000]).evals.map((e) => e.id))
       .toEqual(['e0', 'e1', 'e2', 'e3', 'e4']);

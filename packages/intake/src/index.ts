@@ -9,5 +9,3 @@ export * from './compile.js';
 export * from './alternatives.js';
 export * from './intake.js';
 export * from './options.js';
-
-export * from "./structured.js";

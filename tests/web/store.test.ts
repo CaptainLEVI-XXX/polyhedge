@@ -23,7 +23,7 @@ afterAll(async () => {
 // Only the fields the store itself touches; the engine's own types are
 // exercised where they are produced.
 const record = { resolved: { snapshotId: 'snap-a' }, meta: { quotedAt: 'then' } } as never;
-const view = { statement: 'first reading', options: [] } as never;
+const view = { parsed: { subject: 'first reading' }, options: [] } as never;
 
 describe('an accepted quote is immutable', () => {
   it('pins the selected basket and rejects a competing selection', async () => {
@@ -47,9 +47,6 @@ describe('an accepted quote is immutable', () => {
     // A second accept is a double-click, not a second decision.
     const again = await store.acceptQuote(first.id, 'owner-1');
     expect(again.acceptedAt).toBe(accepted.acceptedAt);
-
-    // Nothing may write over it afterwards.
-    await expect(store.assertMutable(first.id, 'owner-1')).rejects.toThrow(/cannot be changed/);
 
     // A re-price is a new row that points back, so the original stays readable
     // exactly as it was when it was agreed to.

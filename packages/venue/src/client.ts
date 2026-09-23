@@ -21,10 +21,6 @@ export async function searchEvents(q: string): Promise<GammaEvent[]> {
   return events.flatMap((e) => { try { return [parseEvent(e)]; } catch { return []; } });
 }
 
-export async function fetchBook(tokenId: string): Promise<ClobBook> {
-  return parseBook(await getJson(`${CLOB}/book?token_id=${encodeURIComponent(tokenId)}`));
-}
-
 export async function fetchBooks(tokenIds: string[], signal: AbortSignal = AbortSignal.timeout(8_000)): Promise<ClobBook[]> {
   const out: ClobBook[] = [];
   for (let i = 0; i < tokenIds.length; i += BOOKS_BATCH) {
