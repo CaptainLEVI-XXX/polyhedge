@@ -34,6 +34,12 @@ const frame = (assetId: string, asks: [number, number][]) =>
   ]);
 
 describe('deciding a quote is stale', () => {
+  it('reprices sub-cent moves and redistribution within consumed depth',()=>{
+    const previous=book('held',[[100000,10],[110000,10]]);
+    const watch=watchFor(['held','unheld'],[{tokenId:'held',shares:20}],new Map([['held',previous]]));
+    expect(assess(watch,book('unheld',[[100000,10]]),book('unheld',[[101000,10]])).resolve).toBe(true);
+    expect(assess(watch,previous,book('held',[[100000,5],[110000,15]]))).toEqual({resolve:true,reason:'consumed_level_moved'});
+  });
   it('never lets a late result overwrite a frozen quote', () => {
     const frozenAt = 1_000;
     // Started before the freeze and lands after it: the classic race.
@@ -82,7 +88,7 @@ describe('re-pricing a watched quote', () => {
       const resolve = vi.fn(async () => {});
       feed.add({
         id: 'w',
-        watch: { eligibleTokens: ['t'], consumedTo: new Map(), tickMicros: 10_000 },
+        watch: { eligibleTokens: ['t'], consumedTo: new Map() },
         resolve,
         notify: () => {},
       });
@@ -113,7 +119,7 @@ describe('re-pricing a watched quote', () => {
       const resolve = vi.fn(async () => {});
       const stop = feed.add({
         id: 'w',
-        watch: { eligibleTokens: ['t'], consumedTo: new Map(), tickMicros: 10_000 },
+        watch: { eligibleTokens: ['t'], consumedTo: new Map() },
         resolve,
         notify: () => {},
       });
@@ -137,7 +143,7 @@ it('processes batched price changes without starving or overlapping solves durin
     const feed=new MarketFeed(noSocket);
     let release:()=>void=()=>{};
     const resolve=vi.fn(()=>new Promise<void>(done=>{release=done;}));
-    stop=feed.add({id:'burst',watch:{eligibleTokens:['t'],consumedTo:new Map([['t',500000]]),tickMicros:10000},resolve,notify:()=>{}});
+    stop=feed.add({id:'burst',watch:{eligibleTokens:['t'],consumedTo:new Map([['t',500000]])},resolve,notify:()=>{}});
     await vi.advanceTimersByTimeAsync(100);
     feed.ingest(frame('t',[[400000,100]]));
     for(let i=0;i<16;i++){
@@ -171,7 +177,7 @@ it('streams sub-cent best-ask moves while a basket solve is still pending, witho
   const marketPrice=vi.fn();
   let release=()=>{};
   const resolve=vi.fn(()=>new Promise<void>(done=>{release=done;}));
-  const stop=feed.add({id:'prices',watch:{eligibleTokens:['t'],consumedTo:new Map(),tickMicros:10000},resolve,notify:()=>{},marketPrice});
+  const stop=feed.add({id:'prices',watch:{eligibleTokens:['t'],consumedTo:new Map()},resolve,notify:()=>{},marketPrice});
   try{
     await vi.advanceTimersByTimeAsync(100);
     feed.ingest(frame('t',[[400000,100]]));

@@ -23,7 +23,6 @@ export interface Watch {
   eligibleTokens: string[];
   /** Deepest ask price this basket actually consumed, per held token. */
   consumedTo: Map<string, number>;
-  tickMicros: number;
 }
 
 export type ChangeVerdict =
@@ -39,7 +38,9 @@ export function assess(watch: Watch, previous: ClobBook | undefined, next: ClobB
   const bestAfter = next.asks[0]?.priceMicros;
 
   if (bestBefore !== undefined && bestAfter !== undefined) {
-    if (Math.abs(bestAfter - bestBefore) >= watch.tickMicros) {
+    // Prices already have integer-micro precision. A shared one-cent threshold
+    // misses genuine moves in markets whose tick is smaller.
+    if (bestAfter !== bestBefore) {
       return { resolve: true, reason: 'best_ask_moved' };
     }
   } else if (bestBefore !== bestAfter) {
@@ -49,12 +50,11 @@ export function assess(watch: Watch, previous: ClobBook | undefined, next: ClobB
 
   const consumed = watch.consumedTo.get(next.assetId);
   if (consumed !== undefined) {
-    const sizeAtOrBelow = (book: ClobBook | undefined): number =>
-      (book?.asks ?? [])
-        .filter((level) => level.priceMicros <= consumed)
-        .reduce((sum, level) => sum + level.size, 0);
-
-    if (Math.abs(sizeAtOrBelow(next) - sizeAtOrBelow(previous)) > 1e-9) {
+    const levels = (book: ClobBook | undefined) => (book?.asks ?? [])
+      .filter(level => level.priceMicros <= consumed);
+    const before=levels(previous),after=levels(next);
+    // Equal total depth can still move between prices and change fill cost.
+    if (before.length!==after.length||before.some((level,i)=>level.priceMicros!==after[i]!.priceMicros||Math.abs(level.size-after[i]!.size)>1e-9)) {
       return { resolve: true, reason: 'consumed_level_moved' };
     }
     return { resolve: false, reason: 'deeper_than_consumed' };
@@ -124,7 +124,6 @@ export function watchFor(
   eligibleTokens: string[],
   held: { tokenId: string; shares: number }[],
   books: Map<string, ClobBook>,
-  tickMicros = 10_000,
 ): Watch {
   const consumedTo = new Map<string, number>();
 
@@ -142,5 +141,5 @@ export function watchFor(
     if (deepest !== null) consumedTo.set(leg.tokenId, deepest);
   }
 
-  return { eligibleTokens, consumedTo, tickMicros };
+  return { eligibleTokens, consumedTo };
 }

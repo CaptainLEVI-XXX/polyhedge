@@ -281,12 +281,11 @@ export class MarketFeed {
       } else if (frame.event_type === 'tick_size_change') {
         const tick = Number((frame as unknown as TickSizeMessage).new_tick_size ?? 0);
         if (!Number.isFinite(tick) || tick <= 0) continue;
-        // A wider tick changes what counts as a move at all, so every watcher
+        // A tick change affects executable prices, so every watcher
         // of this token is re-priced once rather than silently judged by the
-        // old granularity.
+        // old execution constraints.
         for (const w of this.watchers.values()) {
           if (!w.watch.eligibleTokens.includes(assetId)) continue;
-          w.watch.tickMicros = Math.round(tick * 1_000_000);
           this.schedule(w.id, 'tick size changed');
         }
       }
