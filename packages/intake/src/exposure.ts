@@ -23,12 +23,12 @@ export interface ExtractionResult {
 
 const ROLE_CRITERIA: Record<string, string> = {
   holding: 'The amount of the underlying the user currently holds.',
-  loss: 'The dollar amount the user could lose, or is trying to protect against.',
+  loss: 'The TOTAL dollar loss or maximum loss the user states. A slope such as $10 per $1 price drop is NOT a total loss; classify both slope numbers as unrelated. A separately stated cover target is not another loss.',
   budget: 'The amount the user is willing to spend on the hedge or protection itself.',
   threshold: 'A single numeric level the position loses below or above.',
   range_low: 'The numerically LOWER numeric endpoint of either a comfortable range OR a gradual loss ramp. For a falling-value loss ramp this is where the loss reaches its maximum, not where it starts. A numeric endpoint is not a dollar loss amount.',
   range_high: 'The numerically HIGHER numeric endpoint of either a comfortable range OR a gradual loss ramp. For a falling-value loss ramp this is where the loss starts at zero. A numeric endpoint is not a dollar loss amount.',
-  unrelated: 'Not related to holdings, losses, budget, or numeric levels for this hedge.',
+  unrelated: 'A per-unit loss slope or its unit move (for example $10 and $1 in $10 per $1 drop), a date, a separately labelled cover target, or another number that is not a holding quantity, total loss, budget or price endpoint.',
 };
 
 const LOSS_DIRECTION_CRITERIA: Record<string, string> = {

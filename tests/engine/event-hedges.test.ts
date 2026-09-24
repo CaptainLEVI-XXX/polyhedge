@@ -118,3 +118,25 @@ it('prices true cost and the cost/protection curve for binary and categorical he
     }
   }
 });
+
+it('quotes a named NO hedge inside an augmented event without relying on the other outcomes',async()=>{
+  const f=setup(true),m=f.event.markets[0]!;
+  f.event.negRisk=true;f.event.negRiskAugmented=true;f.event.negRiskMarketId='group';
+  Object.assign(m,{question:'Will Arsenal win the championship?',groupItemTitle:'Arsenal',negRisk:true,negRiskMarketId:'group',negRiskOther:false});
+  const selection=f.request.selection!;
+  const support=eventSupport(f.event,selection);expect(support.eligible).toBe(true);
+  const unspecified=structuredClone(f.event);delete unspecified.negRiskAugmented;
+  expect(eventSupport(unspecified,selection).eligible).toBe(true);
+  f.request.ruleHash=support.ruleHash;
+  f.request.shape={templateId:'outcome_losses',losses:support.outcomes.map(o=>({outcomeId:o.id,lossCents:o.side==='NO'?10000:0}))};
+  const record=await quote(f.request,{...f.deps,fetchBooks:async ids=>(await f.deps.fetchBooks(ids)).map(b=>({...b,asks:[{priceMicros:b.assetId===m.noTokenId?200000:990000,size:10000}]}))});
+  expect(record.basket.legs.filter(l=>l.shares>0).map(l=>[l.marketId,l.side])).toEqual([[m.id,'NO']]);
+  expect(record.basket.totalCostCents).toBeCloseTo(2000,0);
+  expect((await replay(record,(await f.deps.fetchBooks([m.yesTokenId,m.noTokenId])).map(b=>({...b,asks:[{priceMicros:b.assetId===m.noTokenId?200000:990000,size:10000}]})))).target).toEqual(record.basket.target);
+  for(const patch of [{negRiskOther:true},{negRiskOther:undefined},{groupItemTitle:'Person A'},{groupItemTitle:'Other'},{groupItemTitle:''},{outcomeLabels:['Up','Down']},{negRiskMarketId:'wrong'}]){
+    const changed=structuredClone(f.event);Object.assign(changed.markets[0]!,patch);
+    expect(eventSupport(changed,selection).eligible).toBe(false);
+  }
+  expect(eventSupport(f.event,{kind:'categorical'}).eligible).toBe(false);
+  await expect(revalidateQuote(record,async()=>({...f.event,markets:[{...m,description:'Changed settlement rules'}]}))).rejects.toThrow(/changed/);
+});

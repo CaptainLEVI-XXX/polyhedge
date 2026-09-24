@@ -1,3 +1,4 @@
+import { hedgeQuality } from './hedge-quality.js';
 import { familyEnabled } from './event-family.js';
 import { buildBasketOptions } from '@polyhedge/intake';
 import { quote, quoteSession, type QuoteRequest, type QuoteRecord, type QuoteOptions } from '@polyhedge/engine';
@@ -24,7 +25,7 @@ function structuredView(record:QuoteRecord,event:GammaEvent,others:{name:string;
     'No polyhedge fee. Purchase cost and venue fees are included. Fills are not guaranteed.',
   ]);
 }
-async function buildStructuredQuote(request:QuoteRequest,owner:string, parent:string|null=null,revision=0,requestSignal?:AbortSignal,options?:QuoteOptions) {
+async function buildStructuredQuote(request:QuoteRequest,owner:string, parent:string|null=null,revision=0,requestSignal?:AbortSignal,options?:QuoteOptions,requireUsefulExample=false) {
   const start=performance.now();
   const deadlineAt=Date.now()+10_000;
   const timeout=AbortSignal.timeout(10_000);
@@ -37,6 +38,7 @@ async function buildStructuredQuote(request:QuoteRequest,owner:string, parent:st
   },saveSnapshot:putSnapshot});
   options??={jevModelVersion:'structured',calibrationMapVersion:'not-used'};
   const record=await quote(request,deps,options);
+  if(requireUsefulExample&&!hedgeQuality(record.basket.target,record.basket.achievable,record.basket.totalCostCents).eligible)throw Error('unavailable: Live prices no longer give this example enough protection after costs. Your brief is saved; you can edit the amounts or choose another example.');
   const solveMs=performance.now()-start-metadataMs-booksMs;
   const alternativesStart=performance.now();
   const alternatives=(await buildBasketOptions(request,deps,options,record)).filter(o=>o.record!==record);
@@ -52,9 +54,9 @@ async function buildStructuredQuote(request:QuoteRequest,owner:string, parent:st
 
 let active = 0;
 /** Bounded admission, no unbounded queue behind the synchronous solver. */
-export async function structuredQuote(request:QuoteRequest,owner:string,parent:string|null=null,revision=0,requestSignal?:AbortSignal,options?:QuoteOptions) {
+export async function structuredQuote(request:QuoteRequest,owner:string,parent:string|null=null,revision=0,requestSignal?:AbortSignal,options?:QuoteOptions,requireUsefulExample=false) {
   if(!request.selection || !familyEnabled(request.selection.kind))throw new Error('This market type is temporarily disabled.');
   if(active>=2)throw new Error('quote_busy');
   active++;
-  try{return await buildStructuredQuote(request,owner,parent,revision,requestSignal,options);}finally{active--;}
+  try{return await buildStructuredQuote(request,owner,parent,revision,requestSignal,options,requireUsefulExample);}finally{active--;}
 }

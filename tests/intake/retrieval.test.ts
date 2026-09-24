@@ -191,3 +191,10 @@ describe('retrieve', () => {
     }
   });
 });
+
+it('supports a latest-date ceiling without returning later observations',()=>{
+  const events=[indexed({eventId:'before',observationAt:'2026-09-23T16:00:00Z'}),indexed({eventId:'same',observationAt:'2026-09-24T16:00:00Z'}),indexed({eventId:'after',observationAt:'2026-09-24T18:00:00Z'})];
+  const result=retrieve(events,'2026-09-24T16:00:00Z',5,'ceiling');
+  expect(result.kind).toBe('candidates');
+  if(result.kind==='candidates')expect(result.events.map(e=>e.eventId)).toEqual(['same','before']);
+});

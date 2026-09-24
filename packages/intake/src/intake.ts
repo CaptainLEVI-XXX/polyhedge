@@ -58,7 +58,7 @@ import { buildAlternatives, type Alternative } from './alternatives.js';
 import { compile, MissingLevelError } from './compile.js';
 import { extractExposure, needsPathCheck, type ExtractionResult } from './exposure.js';
 import { assessFit, type FitCandidate } from './fit.js';
-import { findNumbers, parseDeadline, parseUnderlying, type NumberCandidate } from './parse.js';
+import { findNumbers, parseDeadline, type NumberCandidate } from './parse.js';
 import { candidatesForText, retrieve, subjectWords, type IndexedEvent } from './retrieve.js';
 import { selectShape, selectExtractedShape, readShapeAnswer } from './shape.js';
 import {
@@ -81,6 +81,8 @@ export type IntakeResult =
 export interface IntakeDeps extends QuoteDeps {
   /** Batch shape interpretation with extraction; uncertain results use the detailed fallback. */
   combinedShape?: boolean;
+  /** Studio uses a latest acceptable observation; callers must confirm earlier observations. */
+  deadlineMode?: 'at_or_after' | 'ceiling';
   /** Read back the interpreted exposure before fetching books or solving. */
   prepareOnly?: boolean;
   protectionGoal?: QuoteRequest['protectionGoal'];
@@ -653,7 +655,7 @@ export async function intake(
   // Two filters, in order, both in code. `candidatesForText` narrows hundreds of
   // ladders to the ones plausibly about this subject; `retrieve` then does every
   // date comparison. Neither asks the model anything.
-  const retrieval = retrieve(listed, exposure.deadline.value);
+  const retrieval = retrieve(listed, exposure.deadline.value, 5, deps.deadlineMode);
   if (retrieval.kind === 'no_market_listed') {
     return {
       kind: 'no_market_listed',

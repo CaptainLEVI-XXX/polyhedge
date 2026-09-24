@@ -410,13 +410,15 @@ export function candidatesForText(text: string, events: IndexedEvent[]): Indexed
 
 /**
  * Filters already-indexed events to a bounded, nearest-first shortlist at or
- * after `deadlineIso` — a bounded shortlist because the model scores what
+ * after `deadlineIso` by default — a bounded shortlist because the model scores what
  * it is handed and cannot surface what retrieval missed. An event observing
  * before the deadline is excluded outright. An event observing on a LATER
  * DATE than the deadline is kept but flagged with `observationNote`, since
  * that is time basis risk the user accepts explicitly rather than a mismatch
  * to hide. All date/time comparison happens here, in code — never handed to
- * the model.
+ * the model. Studio may instead request a ceiling: observations after the
+ * deadline are then excluded and the latest earlier observations come first.
+ * The caller is responsible for expiry filtering and explicit date-risk consent.
  *
  * `events` is the SHORTLIST the subject prefilter already produced, not the
  * whole corpus. The two narrowings are kept separate on purpose: subject
@@ -428,11 +430,12 @@ export function retrieve(
   events: IndexedEvent[],
   deadlineIso: string,
   limit = 5,
+  dateMode: 'at_or_after' | 'ceiling' = 'at_or_after',
 ): RetrievalResult {
-  const deadlineMs = Date.parse(deadlineIso);
+  const deadlineMs = Date.parse(dateMode==='ceiling'&&!deadlineIso.includes('T')?`${deadlineIso}T23:59:59.999Z`:deadlineIso);
   const deadlineDate = deadlineIso.slice(0, 10);
 
-  const eligible = events.filter((e) => Date.parse(e.observationAt) >= deadlineMs);
+  const eligible = events.filter((e) => dateMode==='ceiling'?Date.parse(e.observationAt)<=deadlineMs:Date.parse(e.observationAt)>=deadlineMs);
 
   if (eligible.length === 0) {
     const furthestListed =
@@ -448,11 +451,11 @@ export function retrieve(
       reason:
         furthestListed === null
           ? 'no listed market matches what you described'
-          : `no listed market observes at or after ${deadlineDate}; the furthest listed observation is ${furthestListed}`,
+          : `no listed market observes ${dateMode==='ceiling'?'on or before':'at or after'} ${deadlineDate}; the furthest listed observation is ${furthestListed}`,
     };
   }
 
-  const sorted = [...eligible].sort((a, b) => Date.parse(a.observationAt) - Date.parse(b.observationAt));
+  const sorted = [...eligible].sort((a, b) => (dateMode==='ceiling'?-1:1)*(Date.parse(a.observationAt) - Date.parse(b.observationAt)));
   const limited = sorted.slice(0, limit);
 
   const withNotes: IndexedEvent[] = limited.map((e) => {

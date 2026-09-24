@@ -123,7 +123,7 @@ function parseCalendarDeadline(text: string, today: Date): Parsed<string> | null
   text = text.replace(/\b(by|on)\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)(?:,?\s+(\d{4}))?/gi,
     (_, prefix: string, day: string, month: string, year: string | undefined) => `${prefix} ${month} ${day}${year ? ` ${year}` : ''}`)
     .replace(/\b(by|on)\s+(\d{4})-(\d{2})-(\d{2})\b/gi,
-      (raw: string, prefix: string, year: string, month: string, day: string) => {
+      (_: string, prefix: string, year: string, month: string, day: string) => {
         const name = Object.keys(MONTHS).find(k => MONTHS[k] === Number(month));
         return `${prefix} ${name ?? 'invalidmonth'} ${day} ${year}`;
       });
@@ -187,7 +187,7 @@ export function parseUnderlying(text: string): 'BTC' | 'ETH' | 'OTHER' | null {
 
 /** Preserve explicit instants, including offsets; never turn a time into midnight. */
 export function parseDeadline(text:string,today:Date):Parsed<string>|null {
-  const markers=[...text.matchAll(/\b(?:by|on)\s+|\b(?:protection date|deadline)(?:\s+is)?\s*:\s*/gi)];
+  const markers=[...text.matchAll(/\b(?:by|on)\s+|\b(?:protection date|deadline)(?:\s+is\s*:?\s*|\s*:\s*)/gi)];
   const tails=markers.reverse().map(m=>text.slice(m.index+m[0].length).trim());
   if(!markers.length)tails.push(text.trim());
   for(const tail of tails){

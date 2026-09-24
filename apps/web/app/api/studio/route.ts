@@ -4,9 +4,9 @@ import { fetchEvent } from '@polyhedge/venue';
 import { EventQuoteError } from '@polyhedge/engine';
 import { LpNotOptimalError } from '@polyhedge/core';
 import { marketIndex } from '@/lib/markets';
-import { describeExposure, productHelp, studioEngine, updateDraft } from '@/lib/studio-intake';
+import { describeExposure, productHelp, studioEngine, updateDraft, updateAmounts } from '@/lib/studio-intake';
 import { quoteFromDraft, readDraft, reply } from '@/lib/studio-draft';
-import { cachedStudioExamples } from '@/lib/studio-examples';
+import { cachedStudioExamples, refreshExampleEvidence } from '@/lib/studio-examples';
 import { structuredQuote } from '@/lib/structured-quote';
 import { requireCaller, readJsonBody, rateLimit, TooManyRequests } from '@/lib/identity';
 import { handleRouteError } from '@/lib/errors';
@@ -51,13 +51,17 @@ export async function POST(request:Request) {
       if(help)return Response.json({result:{kind:'help',message:help}});
     }
     if(action==='build'||action==='example') {
-      rateLimit(caller,'studio-quote',12,60_000);
-      const draft=prepared??readDraft(b.session);
+      if(action==='build')rateLimit(caller,'studio-quote',12,60_000);
+      let draft=prepared??readDraft(b.session);
+      if(action==='example')draft=refreshExampleEvidence(draft,await fetchEvent(draft.event!.id,request.signal));
       const ready=reply(draft);
-      if(!ready.ready)return Response.json({result:ready});
-      const {stored,view,timings}=await structuredQuote(quoteFromDraft(draft),caller.id,null,0,request.signal,draft.options);
+      // Return the prepared brief first. The client saves it before pricing,
+      // so a venue/solver failure never loses the example or its editable inputs.
+      if(action==='example'||!ready.ready)return Response.json({result:ready});
+      const {stored,view,timings}=await structuredQuote(quoteFromDraft(draft),caller.id,null,0,request.signal,draft.options,draft.exampleQualityRequired===true);
       return Response.json({result:{...ready,kind:'quoted',quoteId:stored.id,view,message:'Compare the cost, payout and remaining target loss. All options use the same exposure and book snapshot.'},timings:{...timings,total:performance.now()-started}});
     }
+    if(action==='amounts')return Response.json({result:reply(updateAmounts(readDraft(b.session),b.amounts))});
     if(!text)throw new Error('bad_request: enter a description or answer');
     rateLimit(caller,'studio-read',24,60_000);
     const index=await marketIndex();

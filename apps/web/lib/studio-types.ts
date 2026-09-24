@@ -9,8 +9,12 @@ export interface StudioReply {
   message: string;
   question?: { key: string; text: string; choices?: StudioChoice[] };
   ready?: boolean;
+  collectAmounts?: boolean;
+  unavailable?: string;
   rules?: string[];
   quoteId?: string;
   view?: QuotedView;
 }
 export interface StudioExample { id: string; label: string; description: string; session: string; }
+
+export const isAmountField=(key:string)=>['lossUsd','coverageUsd','budgetUsd'].includes(key)||key.startsWith('outcome:');

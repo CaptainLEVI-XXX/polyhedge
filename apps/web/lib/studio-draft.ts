@@ -2,12 +2,15 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { QuoteOptions, QuoteRequest } from '@polyhedge/engine';
 import type { IntakeSession, TypedExposure } from '@polyhedge/intake';
 import type { EventSelection, EventSupport } from '@polyhedge/venue';
-import type { BriefField, StudioReply, StudioChoice } from './studio-types.js';
+import { isAmountField, type BriefField, type StudioReply, type StudioChoice } from './studio-types.js';
 
 export interface StudioDraft {
   version: 1; expires: number; description: string; fields: BriefField[];
   request?: QuoteRequest; options?: QuoteOptions; assumptions: string[];
   holdingInterpretation?: { candidates: { quantity:number; coin:string }[]; selected?: { quantity:number; coin:string } };
+  unavailable?: string;
+  exampleQualityRequired?: boolean;
+  numericDate?: {requested:string;observed:string};
   numeric?: IntakeSession; known?: Partial<TypedExposure>;
   event?: { id: string; selection: EventSelection; support: EventSupport };
   matches?: { id: string; title: string; selection: EventSelection }[];
@@ -53,19 +56,20 @@ function pendingAmount(d:StudioDraft) {
   if(cover?.status==='missing')return {key:'coverageUsd',text:'How much of your potential loss do you want to protect?',choices:[{value:'full',label:'The full loss'}]};
   if(budget?.status==='missing')return {key:'budgetUsd',text:'What is the most you want to spend on protection?',choices:[{value:'no cap',label:'Compare costs without a spending cap'}]};
   const loss=amount(field(d,'lossUsd')),target=amount(field(d,'coverageUsd'));
-  if(loss!==null&&target!==null&&target>loss)return {key:'coverageUsd',text:'The cover target exceeds your potential loss. How much would you like to protect?',choices:[{value:'full',label:'The full loss'}]};
+  if(loss!==null&&target!==null&&target>loss)return {key:'coverageUsd',text:`Your $${target.toLocaleString('en-US')} cover target exceeds your $${loss.toLocaleString('en-US')} potential loss. Reduce the cover target, or edit the potential loss if that amount is incorrect.`,choices:[{value:'full',label:'The full loss'}]};
   const inferred=d.fields.find(f=>f.status==='inferred');
   if(inferred)return {key:inferred.key,text:`Please confirm ${inferred.label.toLowerCase()}: ${inferred.value}.`,choices:[{value:inferred.value,label:`Use ${inferred.value}`} ]};
   return undefined;
 }
 export function reply(d:StudioDraft,message='Here is what I understood. Edit any detail before pricing.'):StudioReply {
+  if(!d.pending&&d.numericDate)d.pending={key:'numericDate',text:`The closest matched market observes on ${d.numericDate.observed}, before your requested ceiling ${d.numericDate.requested}. It does not cover price changes after its observation. Do you accept this earlier observation?`,choices:[{value:'confirm',label:'Use this earlier observation'},{value:'change',label:'Change my date or exposure'}]};
   if(!d.pending && d.request){const pending=pendingAmount(d);if(pending)d.pending=pending;}
   const ready=!!d.request&&!d.pending&&d.fields.every(f=>f.status==='stated');
-  return {kind:'brief',session:sealDraft(d),description:d.description,brief:d.fields.map(f=>({...f,readOnly:(d.event?.selection.kind!=='numeric'&&!!d.event&&['trigger','lossUsd'].includes(f.key))})),message,ready,...(d.pending?.key==='eventRules'?{rules:[...new Set(d.event?.support.rules.map(r=>r.description)??[])]}:{}),...(d.pending?{question:d.pending}:{})};
+  return {kind:'brief',session:sealDraft(d),description:d.description,brief:d.fields.map(f=>({...f,readOnly:(d.event?.selection.kind!=='numeric'&&!!d.event&&['trigger','lossUsd'].includes(f.key))})),message,ready,collectAmounts:!d.unavailable&&!d.numeric&&(!d.pending||isAmountField(d.pending.key))&&!!(d.request||d.event),...(d.unavailable?{unavailable:d.unavailable}:{}),...(d.pending?.key==='eventRules'?{rules:[...new Set(d.event?.support.rules.map(r=>r.description)??[])]}:{}),...(d.pending?{question:d.pending}:{})};
 }
 /** The original loss stays in the brief; partial cover changes only its explicit target. */
 export function quoteFromDraft(d:StudioDraft):QuoteRequest {
-  if(!d.request||d.fields.some(f=>f.status!=='stated')||d.pending)throw new Error('bad_request: complete and confirm the brief first');
+  if(!d.request||d.fields.some(f=>f.status!=='stated')||d.pending||d.numericDate)throw new Error('bad_request: complete and confirm the brief first');
   const loss=amount(field(d,'lossUsd')),cover=amount(field(d,'coverageUsd'));
   const budget=field(d,'budgetUsd')==='no cap'?undefined:amount(field(d,'budgetUsd'));
   if(loss===null||cover===null||loss<=0||cover<=0||cover>loss||budget===null||budget===0)throw new Error('bad_request: check the loss, cover target and spending budget');

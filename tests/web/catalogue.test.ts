@@ -33,7 +33,7 @@ it('resumes after interruption without replacing the last complete snapshot or c
 });
 
 it('round trips binary-only catalogues and ignores unfinished replacement files',async()=>{
-  const path=await store(),row=listing('1','Bitcoin election','2099-01-01T12:00:00Z');
+  const path=await store(),row=listing('1','Bitcoin election','2099-01-01T12:00:00Z',{searchText:'Parent event context: Bitcoin election'});
   await publishSnapshot({...emptyIndex(),listings:[row],builtAt:123,discoveryComplete:true},path);
   await writeFile(join(path,'catalogue.json.gz.crashed.tmp'),'truncated');
   const restored=await loadSnapshot(path);
@@ -73,9 +73,15 @@ it('publishes a cold-start example before another family finishes; local reads r
       negRisk:true,negRiskMarketID:'group',active:true,closed:false,acceptingOrders:true,enableOrderBook:true}))};
   let release!:()=>void;
   const slow=new Promise<Response>(resolve=>{release=()=>resolve(Response.json({events:[]}));});
-  const venue:typeof fetch=async input=>{
+  let bookMode:'good'|'outage'|'expensive'='good';
+  const venue:typeof fetch=async (input,init)=>{
     const url=new URL(String(input));
     expect(url.pathname).not.toBe('/events/keyset');
+    if(url.pathname==='/books'&&bookMode==='outage')throw Error('Temporary book outage');
+    if(url.pathname==='/books')return Response.json((JSON.parse(String(init?.body)) as {token_id:string}[]).map(({token_id})=>({
+      market:`0x${String(Math.ceil(Number(token_id)/2)).padStart(64,'0')}`,asset_id:token_id,timestamp:String(Date.now()),hash:token_id,bids:[],min_order_size:5,
+      asks:[{price:bookMode==='expensive'?'0.98':Number(token_id)%2?'0.03':'0.98',size:'100000'}],
+    })));
     if(url.pathname==='/events/btc')return Response.json(raw);
     if(url.searchParams.get('q')?.includes('Chicago'))return slow;
     return Response.json({events:url.searchParams.get('q')==='Bitcoin price'?[{id:'btc'}]:[]});
@@ -87,6 +93,10 @@ it('publishes a cold-start example before another family finishes; local reads r
     expect(result.refreshing).toBe(true);expect(result.examples.map(e=>e.id)).toEqual(['btc']);
     expect(readDraft(result.examples[0]!.session).request?.eventId).toBe('btc');
   }finally{release();await refreshing;}
+  bookMode='outage';await refreshExampleCache(null,path,venue);
+  expect(JSON.parse(await readFile(join(path,'studio-examples.json'),'utf8')).entries).toHaveLength(1);
   vi.useFakeTimers();vi.setSystemTime(Date.now()+11*60_000);
   expect((await cachedStudioExamples(path)).examples).toEqual([]);
+  vi.useRealTimers();bookMode='expensive';await refreshExampleCache(null,path,venue);
+  expect(JSON.parse(await readFile(join(path,'studio-examples.json'),'utf8')).entries).toEqual([]);
 });

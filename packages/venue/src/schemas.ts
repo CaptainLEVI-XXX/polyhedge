@@ -42,7 +42,7 @@ const marketSchema = z.object({
   orderPriceMinTickSize: z.number(), endDate: z.string(),
   conditionId: z.string().optional(), questionID: z.string().optional(),
   active: z.boolean().optional(), closed: z.boolean().optional(), enableOrderBook: z.boolean().optional(), acceptingOrders: z.boolean().optional(),
-  negRisk: z.boolean().optional(), negRiskMarketID: z.string().optional(),
+  negRisk: z.boolean().optional(), negRiskOther: z.boolean().optional(), negRiskMarketID: z.string().optional(),
   feeSchedule: z.object({ rate: z.number(), takerOnly: z.boolean() }).optional(),
 });
 
@@ -71,7 +71,7 @@ export interface GammaMarket {
   endDate: string;
   conditionId?: string; questionId?: string;
   active?: boolean; closed?: boolean; enableOrderBook?: boolean; acceptingOrders?: boolean;
-  negRisk?: boolean; negRiskMarketId?: string;
+  negRisk?: boolean; negRiskOther?: boolean; negRiskMarketId?: string;
   outcomeLabels?: [string, string]; yesOutcomeIndex?: number;
 }
 
@@ -112,6 +112,7 @@ export function parseEvent(raw: unknown): GammaEvent {
         yesTokenId: tokens[first]!, noTokenId: tokens[second]!,
         yesPrice: Number(prices[first] ?? '0'),
         outcomeLabels: [outcomes[first]!, outcomes[second]!], yesOutcomeIndex: first,
+        ...(m.negRiskOther !== undefined ? {negRiskOther:m.negRiskOther} : {}),
         ...(m.conditionId !== undefined ? { conditionId: m.conditionId } : {}),
         ...(m.questionID !== undefined ? { questionId: m.questionID } : {}),
         ...(m.active !== undefined ? { active: m.active } : {}),

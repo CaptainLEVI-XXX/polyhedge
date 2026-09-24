@@ -1,6 +1,8 @@
 import type { NextConfig } from 'next';
+import { resolve } from 'node:path';
 
 const config: NextConfig = {
+  outputFileTracingRoot: resolve(__dirname, '../..'),
   // Separate output lets production checks run without disrupting the dev server.
   distDir: process.env.POLYHEDGE_BUILD_DIR ?? '.next',
   /**

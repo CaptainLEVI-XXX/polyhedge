@@ -10,7 +10,7 @@ export const catalogueStore = () => process.env.POLYHEDGE_STORE ?? join(process.
 const compress = promisify(gzip), decompress = promisify(gunzip);
 // Parent metadata is repeated for every binary selection in the old snapshot.
 // Group it once per event; rule blobs are fetched only for shortlisted events.
-type Row = [EventListing['selection'], string, string, boolean, string | null];
+type Row = [EventListing['selection'], string, string, boolean, string | null, string?];
 type Group = [string, string, string[], Row[]];
 interface Snapshot {
   version: 5; builtAt: number; discoveryComplete: boolean; discoveredEvents: number;
@@ -26,7 +26,9 @@ export function encodeIndex(index: MarketIndex): Snapshot {
   for (const row of index.listings) {
     let group = groups.get(row.eventId);
     if (!group) { group = [row.eventId,row.slug,row.categories,[]]; groups.set(row.eventId,group); }
-    group[3].push([row.selection,row.title,row.date,row.eligible,row.reason]);
+    const packed:Row=[row.selection,row.title,row.date,row.eligible,row.reason];
+    if(row.searchText)packed[5]=row.searchText;
+    group[3].push(packed);
   }
   return { version: 5, builtAt: index.builtAt, discoveryComplete: index.discoveryComplete,
     discoveredEvents: index.discoveredEvents, groups: [...groups.values()], categories: index.categories,
@@ -37,8 +39,8 @@ export function decodeIndex(raw: Snapshot): MarketIndex {
     || !Number.isFinite(raw.builtAt) || typeof raw.discoveryComplete !== 'boolean') throw new Error('Invalid catalogue snapshot');
   return { ...emptyIndex(), builtAt:raw.builtAt, discoveryComplete:raw.discoveryComplete, discoveredEvents:raw.discoveredEvents,
     categories:raw.categories, events:raw.events, listings: raw.groups.flatMap(([eventId,slug,categories,rows]) =>
-    rows.map(([selection,title,date,eligible,reason]) => ({ id:`${eventId}:${selection.kind}:${selection.marketId ?? ''}`,
-      eventId,slug,categories,selection,title,date,eligible,reason,kind:selection.kind }))),
+    rows.map(([selection,title,date,eligible,reason,searchText]) => ({ id:`${eventId}:${selection.kind}:${selection.marketId ?? ''}`,
+      eventId,slug,categories,selection,title,date,eligible,reason,...(searchText?{searchText}:{}),kind:selection.kind }))),
     resolutionText: new Map(raw.resolutionText), bracketLabels: new Map(raw.bracketLabels) };
 }
 export async function atomicJson(path:string, value:unknown, zipped=false):Promise<void> {
