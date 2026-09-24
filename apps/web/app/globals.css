@@ -448,9 +448,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .field-suggestions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .field-suggestions small { flex-basis:100%; color:var(--muted); }
 .field-suggestions button { padding:8px 12px; font-size:14px; }
-.guided-examples { margin:24px 0; padding:20px; background:#f5f7ff; border:1px solid var(--rule); }
-.guided-examples p { margin:0 0 12px; }
-.guided-examples small { display:block; margin-top:12px; color:var(--muted); }
 .studio .card:not(:disabled):is(:hover, :focus-visible) { background:#eef2ff; color:var(--ink); }
 
 .product-footer { margin-top:48px; padding:24px 0; border-top:1px solid var(--rule); font-size:14px; }
@@ -533,3 +530,5 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .venue-badge svg { flex:none; }
 .history-status,.market-current-ask { font-size:11px; color:var(--muted); margin:8px 0 0; }
 .market-current-ask { font-variant-numeric:tabular-nums; }
+
+.background-audio button { color: var(--action); border: 0; background: transparent; padding: 8px 12px; white-space: nowrap; }
