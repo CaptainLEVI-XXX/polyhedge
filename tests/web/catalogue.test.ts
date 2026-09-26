@@ -63,6 +63,42 @@ it('does not report no match when the catalogue has not finished loading',async(
 
 import { cachedStudioExamples, refreshExampleCache } from '../../apps/web/lib/studio-examples.js';
 import { readDraft } from '../../apps/web/lib/studio-draft.js';
+it('bounds concurrent example candidates and still prices candidates queued behind slow requests',async()=>{
+  const path=await store(),date='2099-10-28T23:59:00Z';
+  const raw=(id:string)=>({id,title:'Bitcoin price',slug:id,negRisk:true,negRiskAugmented:false,negRiskMarketID:'group',endDate:date,tags:[],
+    markets:['<60,000','60,000-64,000','>64,000'].map((label,i)=>({id:String(i+1),question:label,groupItemTitle:label,
+      description:'Resolves using the published observation on the listed date.',endDate:date,
+      clobTokenIds:JSON.stringify([String(i*2+1),String(i*2+2)]),outcomePrices:'["0.2","0.8"]',outcomes:'["Yes","No"]',
+      orderPriceMinTickSize:.01,feeSchedule:{rate:0,takerOnly:true},conditionId:`0x${String(i+1).padStart(64,'0')}`,
+      negRisk:true,negRiskMarketID:'group',active:true,closed:false,acceptingOrders:true,enableOrderBook:true}))});
+  const started:string[]=[],release:(()=>void)[]=[];
+  let active=0,peak=0;
+  const venue:typeof fetch=async(input,init)=>{
+    const url=new URL(String(input));
+    if(url.pathname==='/public-search')return Response.json({events:url.searchParams.get('q')==='Bitcoin price'?[{id:'a'},{id:'b'},{id:'c'}]:[]});
+    if(url.pathname.startsWith('/events/')){
+      const id=url.pathname.split('/').at(-1)!;started.push(id);active++;peak=Math.max(peak,active);
+      if(started.length<=2)await new Promise<void>(resolve=>release.push(resolve));
+      active--;
+      return Response.json(raw(id));
+    }
+    if(url.pathname==='/books')return Response.json((JSON.parse(String(init?.body)) as {token_id:string}[]).map(({token_id})=>({
+      market:`0x${String(Math.ceil(Number(token_id)/2)).padStart(64,'0')}`,asset_id:token_id,timestamp:String(Date.now()),hash:token_id,bids:[],min_order_size:5,
+      asks:[{price:Number(token_id)%2?'0.03':'0.98',size:'100000'}],
+    })));
+    throw Error(`Unexpected request ${url}`);
+  };
+  const refreshing=refreshExampleCache(null,path,venue);
+  try{
+    await vi.waitFor(()=>expect(started).toHaveLength(2));
+    expect(peak).toBe(2);
+  }finally{release.forEach(done=>done());await refreshing;}
+  expect(started).toEqual(['a','b','c']);
+  const cache=JSON.parse(await readFile(join(path,'studio-examples.json'),'utf8'));
+  expect(cache.entries).toHaveLength(1);
+  expect(cache.diagnostics.btc).toMatchObject({candidates:3,qualified:3,issues:[]});
+});
+
 it('publishes a cold-start example before another family finishes; local reads re-sign it and discard expiry',async()=>{
   const path=await store(),date='2099-10-28T23:59:00Z';
   const raw={id:'btc',title:'Bitcoin price',slug:'btc',negRisk:true,negRiskAugmented:false,negRiskMarketID:'group',endDate:date,tags:[],
@@ -93,8 +129,13 @@ it('publishes a cold-start example before another family finishes; local reads r
     expect(result.refreshing).toBe(true);expect(result.examples.map(e=>e.id)).toEqual(['btc']);
     expect(readDraft(result.examples[0]!.session).request?.eventId).toBe('btc');
   }finally{release();await refreshing;}
+  const completed=JSON.parse(await readFile(join(path,'studio-examples.json'),'utf8'));
+  expect(completed.diagnostics.btc).toMatchObject({candidates:1,qualified:1,issues:[]});
   bookMode='outage';await refreshExampleCache(null,path,venue);
-  expect(JSON.parse(await readFile(join(path,'studio-examples.json'),'utf8')).entries).toHaveLength(1);
+  const outage=JSON.parse(await readFile(join(path,'studio-examples.json'),'utf8'));
+  expect(outage.entries).toHaveLength(1);
+  expect(outage.diagnostics.btc).toMatchObject({candidates:1,qualified:0});
+  expect(outage.diagnostics.btc.issues).toContainEqual({eventId:'btc',stage:'quote',message:'Temporary book outage'});
   vi.useFakeTimers();vi.setSystemTime(Date.now()+11*60_000);
   expect((await cachedStudioExamples(path)).examples).toEqual([]);
   vi.useRealTimers();bookMode='expensive';await refreshExampleCache(null,path,venue);

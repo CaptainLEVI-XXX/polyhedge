@@ -187,7 +187,7 @@ export function parseUnderlying(text: string): 'BTC' | 'ETH' | 'OTHER' | null {
 
 /** Preserve explicit instants, including offsets; never turn a time into midnight. */
 export function parseDeadline(text:string,today:Date):Parsed<string>|null {
-  const markers=[...text.matchAll(/\b(?:by|on)\s+|\b(?:protection date|deadline)(?:\s+is\s*:?\s*|\s*:\s*)/gi)];
+  const markers=[...text.matchAll(/\b(?:by|on)\s+(?:(?:the\s+)?end\s+of\s+)?|\bat\s+(?:the\s+)?end\s+of\s+|\b(?:protection date|deadline)(?:\s+is\s*:?\s*|\s*:\s*)/gi)];
   const tails=markers.reverse().map(m=>text.slice(m.index+m[0].length).trim());
   if(!markers.length)tails.push(text.trim());
   for(const tail of tails){

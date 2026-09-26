@@ -35,6 +35,16 @@ describe('findNumbers', () => {
 });
 
 describe('parseDeadline', () => {
+  it('recognizes end-of-day calendar wording without inventing an observation time', () => {
+    const now = new Date('2026-09-26T00:00:00Z');
+    for (const phrase of ['at the end of October 31, 2026', 'by the end of October 31, 2026']) {
+      expect(parseDeadline(`I hold 0.1 BTC and want protection ${phrase}, not against a temporary drop.`, now))
+        .toMatchObject({ value: '2026-10-31', provenance: 'stated' });
+    }
+    expect(parseDeadline('At the end of February 30, 2026', now)).toBeNull();
+    expect(parseDeadline('At the end of October', now)).toBeNull();
+    expect(parseDeadline('At the end of October 31, 2026. Protection date: 2026-11-01.', now)?.value).toBe('2026-11-01');
+  });
   const today = new Date('2026-09-20T00:00:00Z');
   it('reads a named observation date and allows a later explicit correction', () => {
     expect(parseDeadline('cold on September 26', today)?.value).toBe('2026-09-26');

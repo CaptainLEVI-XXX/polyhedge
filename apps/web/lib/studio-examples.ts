@@ -85,8 +85,21 @@ export function examplePlans(index:MarketIndex):ExamplePlan[] {
   ];
 }
 type CachedExample={id:string;label:string;draft:StudioDraft;checkedAt:number;quality?:ReturnType<typeof hedgeQuality>;qualityVersion?:1};
-type ExampleCache={version:1;updatedAt:number;refreshing:boolean;entries:CachedExample[]};
+type ExampleDiagnostics={checkedAt:number;candidates:number;qualified:number;issues:{eventId:string|null;stage:string;message:string}[]};
+type ExampleCache={version:1;updatedAt:number;refreshing:boolean;entries:CachedExample[];diagnostics?:Record<string,ExampleDiagnostics>};
 const EXAMPLE_TTL=10*60_000;
+/** HiGHS runs synchronous WASM in one worker thread. Starting every candidate
+ * together lets unrelated solves consume each other's wall-clock deadlines. */
+function candidateQueue() {
+  let active=0;
+  const waiting:(()=>void)[]=[];
+  return async function run<T>(work:()=>Promise<T>):Promise<T> {
+    if(active>=2)await new Promise<void>(resolve=>waiting.push(resolve));
+    else active++;
+    try{return await work();}
+    finally{const next=waiting.shift();if(next)next();else active--;}
+  };
+}
 function usable(entry:CachedExample):boolean {
   return (!(entry.id in binaryExamplePatterns)||businessDateAllowed(entry.draft.fields.find(f=>f.key==='deadline')?.value??''))&&entry.qualityVersion===1&&entry.quality?.eligible===true&&Date.now()-entry.checkedAt<EXAMPLE_TTL && !!entry.draft.event && familyEnabled(entry.draft.event.selection.kind)
     && Date.parse(entry.draft.event.support.observationAt)>Date.now()+60_000
@@ -95,27 +108,38 @@ function usable(entry:CachedExample):boolean {
 /** Called only by the worker. Publish each family as soon as it is ready. */
 export async function refreshExampleCache(index:MarketIndex|null,store:string,fetchImpl:typeof fetch=fetch):Promise<void> {
   const path=join(store,'studio-examples.json');
-  let cache:ExampleCache={version:1,updatedAt:Date.now(),refreshing:true,entries:[]};
+  let cache:ExampleCache={version:1,updatedAt:Date.now(),refreshing:true,entries:[],diagnostics:{}};
   try{const old=await readJson<ExampleCache>(path);if(old.version===1)cache.entries=old.entries.filter(usable);}catch{ /* First start. */ }
   await atomicJson(path,cache);
   let writes=Promise.resolve();
   const persist=()=>{const value=JSON.parse(JSON.stringify(cache));writes=writes.then(()=>atomicJson(path,value));return writes;};
+  const runCandidate=candidateQueue();
   await Promise.all(examplePlans(index??emptyIndex()).map(async plan=>{
+    const diagnostics:ExampleDiagnostics={checkedAt:Date.now(),candidates:0,qualified:0,issues:[]};
+    cache.diagnostics![plan.id]=diagnostics;
+    const issue=(eventId:string|null,stage:string,error:unknown)=>{
+      const message=error instanceof Error?error.message:String(error);
+      diagnostics.issues.push({eventId,stage,message});
+      console.warn('[examples]',{family:plan.id,eventId,stage,message});
+    };
     try{
-      const signal=AbortSignal.timeout(20_000);
       const candidateLimit=['btc','eth'].includes(plan.id)?7:3;
       let rows=plan.rows.map(r=>({id:r.id}));
       if(!rows.length){
         const url=new URL(`${GAMMA}/public-search`);
         url.search=new URLSearchParams({q:plan.query,events_status:'active',limit_per_type:String(candidateLimit),search_profiles:'false',search_tags:'false',keep_closed_markets:'0'}).toString();
-        const response=await fetchImpl(url,{signal});if(!response.ok)throw new Error('Example discovery unavailable');
+        const response=await fetchImpl(url,{signal:AbortSignal.timeout(20_000)});if(!response.ok)throw new Error(`Example discovery unavailable: HTTP ${response.status}`);
         const raw=await response.json() as {events?:{id?:unknown}[]};
         rows=(raw.events??[]).filter(e=>typeof e.id==='string').slice(0,candidateLimit).map(e=>({id:String(e.id)}));
       }
+      diagnostics.candidates=rows.length;
       // Validate independently, then choose by measured protection.
-      const results=await Promise.allSettled(rows.map(async row=>{
+      const results=await Promise.allSettled(rows.map(row=>runCandidate(async()=>{
+        // Queue time is not network or solve time. Each active candidate gets
+        // a bounded window for its detail, books and at most three variants.
+        const signal=AbortSignal.timeout(60_000);
         const response=await fetchImpl(`${GAMMA}/events/${encodeURIComponent(row.id)}`,{signal});
-        if(!response.ok)throw new Error('Example detail unavailable');
+        if(!response.ok)throw new Error(`Example detail unavailable: HTTP ${response.status}`);
         const event=parseEvent(await response.json());
         const pattern=plan.id==='btc'?/bitcoin price/i:plan.id==='eth'?/ethereum price/i:plan.id==='arsenal'?/EPL.*2027.*Champion|Premier League/i:plan.id==='weather'?/highest temperature in chicago/i:/fed decision/i;
         if(!(binaryExamplePatterns[plan.id]?event.markets.some(m=>binaryExamplePatterns[plan.id]!.test(m.question)):pattern.test(event.title)))throw new Error('Different event family');
@@ -134,9 +158,9 @@ export async function refreshExampleCache(index:MarketIndex|null,store:string,fe
             if(alternative&&alternative.description!==draft.description)variants.push(alternative);
           }
         }
-        const session=quoteSession({signal,deadlineAt:Date.now()+10_000,fetchEvent:async()=>event,fetchBooks:async ids=>{
+        const session=quoteSession({signal,fetchEvent:async()=>event,fetchBooks:async ids=>{
           const response=await fetchImpl(`${CLOB}/books`,{method:'POST',signal,headers:{'content-type':'application/json'},body:JSON.stringify(ids.map(token_id=>({token_id})))});
-          if(!response.ok)throw Error('Example books unavailable');
+          if(!response.ok)throw Error(`Example books unavailable: HTTP ${response.status}`);
           return (await response.json() as unknown[]).map(parseBook);
         },saveSnapshot:async books=>createHash('sha256').update(JSON.stringify(books)).digest('hex')});
         const accepted:{draft:StudioDraft;quality:ReturnType<typeof hedgeQuality>}[]=[];
@@ -144,16 +168,18 @@ export async function refreshExampleCache(index:MarketIndex|null,store:string,fe
         // Sequential solves reuse a single book snapshot and bound CPU work.
         for(const candidate of variants){
           try{
-            const record=await quote(quoteFromDraft(candidate),session);
+            const record=await quote(quoteFromDraft(candidate),{...session,deadlineAt:Date.now()+10_000});
             const quality=hedgeQuality(record.basket.target,record.basket.achievable,record.basket.totalCostCents);
             if(quality.eligible)accepted.push({draft:candidate,quality});
-          }catch{ failed=true; }
+          }catch(error){ failed=true;issue(row.id,'quote',error); }
         }
         accepted.sort((a,b)=>b.quality.reduction-a.quality.reduction);
         if(!accepted.length&&failed)throw Error('Example quality could not be fully measured');
         return accepted[0]??null;
-      }));
+      })));
       const candidates=results.flatMap(r=>r.status==='fulfilled'&&r.value?[r.value]:[]).sort((a,b)=>b.quality.reduction-a.quality.reduction||horizonDistance(a.draft.fields.find(f=>f.key==='deadline')!.value)-horizonDistance(b.draft.fields.find(f=>f.key==='deadline')!.value));
+      diagnostics.qualified=candidates.length;
+      results.forEach((result,i)=>{if(result.status==='rejected')issue(rows[i]!.id,'candidate',result.reason);});
       // A freshly measured failure replaces a previously good example. Network
       // failures may retain a recently verified one, bounded by its TTL.
       if(results.length&&results.every(r=>r.status==='fulfilled'))cache.entries=cache.entries.filter(e=>e.id!==plan.id);
@@ -163,7 +189,8 @@ export async function refreshExampleCache(index:MarketIndex|null,store:string,fe
         cache.entries.push({id:plan.id,label:plan.label,...best,checkedAt:Date.now(),qualityVersion:1});
       }
       cache.updatedAt=Date.now();await persist();
-    }catch{ /* Retain the last validated, unexpired example for this family. */ }
+    }catch(error){issue(null,'discovery',error); /* Retain only unexpired validated examples. */ }
+    diagnostics.checkedAt=Date.now();
   }));
   cache.refreshing=false;cache.updatedAt=Date.now();await persist();
 }
