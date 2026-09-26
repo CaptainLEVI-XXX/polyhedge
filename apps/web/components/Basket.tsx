@@ -20,13 +20,13 @@ import type { CoverOptionView, QuotedView } from '@/lib/view-model';
  * share counts, the curve and even which legs are held can all change while it
  * is open. The job of the UI is to make that visible instead of silent.
  */
-export function Basket({marketHistory,view,initialView,optionId,onBack,live}:{marketHistory:MarketHistories;view:QuotedView;initialView:QuotedView;optionId:string;onBack:()=>void;live:LiveQuote}) {
+export function Basket({marketHistory,view,initialView,optionId,onBack,onStartOver,live}:{marketHistory:MarketHistories;view:QuotedView;initialView:QuotedView;optionId:string;onBack:()=>void;onStartOver:()=>void;live:LiveQuote}) {
   const option=view.options.find(o=>o.id===optionId);
-  if(!option)return <section className="section"><p>This hedge is no longer available at current prices.</p><button onClick={onBack}>Back to all hedges</button></section>;
-  return <Detail marketHistory={marketHistory} initialOption={initialView.options.find(o=>o.id===optionId)} live={live} view={view} option={option} onBack={onBack}/>;
+  if(!option)return <section className="section"><p>This hedge is no longer available at current prices.</p><div className="detail-back-links"><button type="button" onClick={onBack}>Back to all hedges</button><button type="button" onClick={onStartOver}>Back to examples</button></div></section>;
+  return <Detail marketHistory={marketHistory} initialOption={initialView.options.find(o=>o.id===optionId)} live={live} view={view} option={option} onBack={onBack} onStartOver={onStartOver}/>;
 }
 
-function Detail({marketHistory,initialOption,live,view,option,onBack}:{marketHistory:MarketHistories;initialOption:CoverOptionView|undefined;live:LiveQuote;view:QuotedView;option:CoverOptionView;onBack:()=>void}) {
+function Detail({marketHistory,initialOption,live,view,option,onBack,onStartOver}:{marketHistory:MarketHistories;initialOption:CoverOptionView|undefined;live:LiveQuote;view:QuotedView;option:CoverOptionView;onBack:()=>void;onStartOver:()=>void}) {
   const m=basketMetrics(option);
   const firstPayout=initialOption?basketMetrics(initialOption).maxPayout:0;
   const payoutMove=firstPayout>0?(m.maxPayout-firstPayout)/firstPayout*100:null;
@@ -38,7 +38,10 @@ function Detail({marketHistory,initialOption,live,view,option,onBack}:{marketHis
 
   return <div className="basket-detail">
     <div className="detail-navigation">
-      <button className="back" onClick={onBack}>← All hedges</button>
+      <div className="detail-back-links">
+        <button type="button" className="back" onClick={onBack}>← All hedges</button>
+        <button type="button" className="back" onClick={onStartOver}>← Back to examples</button>
+      </div>
       <span className="feed-controls">
         <LiveBadge live={live}/><PricingWarning live={live}/>
       </span>

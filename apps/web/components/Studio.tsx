@@ -85,7 +85,8 @@ export function Studio() {
   return <div className="wrap studio">
     <header className="bar"><Logo/><span className="brand">polyhedge</span><span className="tag">beta</span><span className="spacer"/><Connect/></header>
     <main className="studio-content">
-    {screen==='detail'&&quoted?.view&&quoted.quoteId ? <Basket marketHistory={marketHistory} key={`${quoted.quoteId}:${opened}`} view={currentView!} initialView={quoted.view} optionId={opened} live={live} onBack={()=>setScreen('baskets')}/> : screen==='baskets'&&quoted?.view ? <>
+    {screen==='detail'&&quoted?.view&&quoted.quoteId ? <Basket marketHistory={marketHistory} key={`${quoted.quoteId}:${opened}`} view={currentView!} initialView={quoted.view} optionId={opened} live={live} onBack={()=>setScreen('baskets')} onStartOver={startOver}/> : screen==='baskets'&&quoted?.view ? <>
+      <button type="button" className="back" onClick={startOver}>← Back to examples</button>
       <h1 className="statement">Compare your hedges.</h1>
       <div className="comparison-live"><LiveBadge live={live}/><PricingWarning live={live}/></div>
       <Cards history={live.history} view={currentView!} onOpen={i=>{setOpened(currentView!.options[i]!.id);setScreen('detail');}} onRefine={()=>setScreen('exposure')}/>
