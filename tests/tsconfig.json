@@ -1,0 +1,35 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false
+  },
+  "include": [
+    "**/*.ts",
+    "../examples/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../packages/core"
+    },
+    {
+      "path": "../packages/engine"
+    },
+    {
+      "path": "../packages/intake"
+    },
+    {
+      "path": "../packages/questions"
+    },
+    {
+      "path": "../packages/venue"
+    },
+    {
+      "path": "../packages/execution"
+    },
+    {
+      "path": "../packages/settlement"
+    }
+  ]
+}

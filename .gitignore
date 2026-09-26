@@ -4,8 +4,9 @@
 .env.*.local
 
 # internal working documents — not part of the product
-docs/superpowers/
+docs/
 polyhedge.md
+.superpowers/
 
 # build + deps
 node_modules/
@@ -17,3 +18,5 @@ snapshots/
 last-quote.json
 
 .DS_Store
+dist-evals/
+.polyhedge-store/

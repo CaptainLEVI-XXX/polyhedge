@@ -1,0 +1,17 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# esbuild ships a platform binary via a postinstall script. Approving it here stops
+# pnpm regenerating an `allowBuilds` placeholder in this file on every run, which was
+# being mistaken for an uncommitted change and reported as a broken build.
+allowBuilds:
+  '@reown/appkit': set this to true or false
+  bufferutil: set this to true or false
+  esbuild: set this to true or false
+  keccak: set this to true or false
+  utf-8-validate: set this to true or false
+
+onlyBuiltDependencies:
+  - esbuild
+

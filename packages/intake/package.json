@@ -1,0 +1,16 @@
+{
+  "name": "@polyhedge/intake",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./retrieve": "./src/retrieve.ts"
+  },
+  "dependencies": {
+    "@polyhedge/core": "workspace:*",
+    "@polyhedge/engine": "workspace:*",
+    "@polyhedge/questions": "workspace:*",
+    "@polyhedge/venue": "workspace:*"
+  }
+}

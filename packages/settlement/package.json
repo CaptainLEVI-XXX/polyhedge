@@ -1,0 +1,16 @@
+{
+  "name": "@polyhedge/settlement",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@polyhedge/core": "workspace:*",
+    "@polyhedge/engine": "workspace:*",
+    "@polymarket/client": "0.10.0",
+    "viem": "^2.37.0",
+    "@polyhedge/execution": "workspace:*",
+    "@polymarket/bindings": "0.10.0"
+  }
+}

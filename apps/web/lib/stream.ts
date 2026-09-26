@@ -1,0 +1,366 @@
+import type { ClobBook } from '@polyhedge/venue';
+import { assess, debounce, type Watch } from './freshness.js';
+
+/**
+ * One socket to the venue, shared by everyone watching it.
+ *
+ * Two decisions here are worth stating, because the obvious alternatives are
+ * both worse.
+ *
+ * **The socket lives on the server, not in the browser.** Re-pricing runs the
+ * LP solver, which is server-side, so a browser socket would only be able to
+ * forward what it heard back to us. It would also expose the whole subscription
+ * surface per tab and multiply the venue's load by the number of open tabs.
+ *
+ * Socket books trigger validated repricing and supply indicative best-ask
+ * chart points. They never determine executable basket costs or quantities:
+ * those always come from fresh, content-hashed REST snapshots.
+
+ */
+
+const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
+
+/** No traffic for this long and we say so rather than implying freshness. */
+const STALE_AFTER_MS = 30_000;
+const DEBOUNCE_MS = 750;
+const MAX_CONCURRENT_SOLVES = 2;
+const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+/** The venue drops a connection that goes quiet. */
+const PING_MS = 10_000;
+
+export interface Watcher {
+  id: string;
+  watch: Watch;
+  /** Runs a re-price. Resolves when the result has been delivered or dropped. */
+  resolve(reason: string): Promise<void>;
+  /** Feed-level notices, distinct from a new price. */
+  notify(state: 'live' | 'stale' | 'reconnected'): void;
+  /** Indicative chart only; never an executable fill price. */
+  marketPrice?(tokenId:string,ask:number|null,at:number):void;
+}
+
+interface BookMessage {
+  event_type: 'book';
+  asset_id: string;
+  market: string;
+  timestamp?: string;
+  hash?: string;
+  asks?: { price: string; size: string }[];
+  bids?: { price: string; size: string }[];
+}
+
+interface PriceChangeMessage {
+  event_type: 'price_change';
+  asset_id: string;
+  changes?: { price: string; size: string; side: string }[];
+}
+
+interface TickSizeMessage {
+  event_type: 'tick_size_change';
+  asset_id: string;
+  new_tick_size?: string;
+}
+
+/**
+ * Frames arrive as whatever the venue sends, which is not ours to declare. So
+ * they are read as loose records and narrowed by `event_type` at the point of
+ * use — an unknown frame is skipped rather than coerced into a shape we assumed.
+ */
+type Frame = Record<string, unknown> & { event_type?: unknown };
+
+function toBook(msg: BookMessage): ClobBook {
+  const level = (l: { price: string; size: string }) => ({
+    priceMicros: Math.round(Number(l.price) * 1_000_000),
+    size: Number(l.size),
+  });
+  return {
+    market: msg.market,
+    assetId: msg.asset_id,
+    timestamp: msg.timestamp ?? new Date().toISOString(),
+    hash: msg.hash ?? '',
+    asks: (msg.asks ?? []).map(level).sort((a, b) => a.priceMicros - b.priceMicros),
+    bids: (msg.bids ?? []).map(level).sort((a, b) => b.priceMicros - a.priceMicros),
+  };
+}
+
+/** Applies a delta to a tracked book. Trigger fidelity only — never a price. */
+function applyChange(book: ClobBook, change: { price: string; size: string; side: string }): ClobBook {
+  const priceMicros = Math.round(Number(change.price) * 1_000_000);
+  const size = Number(change.size);
+  const side = change.side.toUpperCase() === 'SELL' ? 'asks' : 'bids';
+  const rest = book[side].filter((l) => l.priceMicros !== priceMicros);
+  // Size zero is a removal, which is exactly the event that invalidates a fill
+  // we were counting on. Dropping it would be the worst thing to drop.
+  const levels = size > 0 ? [...rest, { priceMicros, size }] : rest;
+  levels.sort((a, b) => (side === 'asks' ? a.priceMicros - b.priceMicros : b.priceMicros - a.priceMicros));
+  return { ...book, [side]: levels, timestamp: new Date().toISOString() };
+}
+
+export class MarketFeed {
+  private socket: WebSocket | null = null;
+  private readonly watchers = new Map<string, Watcher>();
+  private readonly books = new Map<string, ClobBook>();
+  private readonly pending = new Map<string, { fire: () => void; cancel: () => void }>();
+  private readonly reasons = new Map<string, string>();
+  private inFlight = 0;
+  private readonly solving=new Set<string>();
+  private retryTimer:ReturnType<typeof setTimeout>|null=null;
+  private queue: string[] = [];
+  private attempt = 0;
+  private lastMessageAt = Date.now();
+  private staleTimer: ReturnType<typeof setInterval> | null = null;
+  private resubscribe: { fire: () => void; cancel: () => void } | null = null;
+  private ping: ReturnType<typeof setInterval> | null = null;
+  private announcedStale = false;
+
+  constructor(private readonly connect: (url: string) => WebSocket = (url) => new WebSocket(url)) {}
+
+  add(watcher: Watcher): () => void {
+    let lastState:string|undefined;
+    const notify=watcher.notify;
+    this.watchers.set(watcher.id,{...watcher,notify:state=>{if(state!==lastState){lastState=state;notify(state);}}});
+    // One reconnect for a burst of arrivals, not one per arrival.
+    this.resubscribe ??= debounce(() => this.open(), 100);
+    this.resubscribe.fire();
+    this.startStaleClock();
+    return () => this.remove(watcher.id);
+  }
+
+  private remove(id: string): void {
+    this.watchers.delete(id);
+    this.pending.get(id)?.cancel();
+    this.pending.delete(id);
+    this.reasons.delete(id);
+    this.queue = this.queue.filter((q) => q !== id);
+    if (this.watchers.size === 0) this.close();
+  }
+
+  /** Every token any watcher may care about, held or merely eligible. */
+  private tokens(): string[] {
+    const all = new Set<string>();
+    for (const w of this.watchers.values()) for (const t of w.watch.eligibleTokens) all.add(t);
+    return [...all];
+  }
+
+  private open(): void {
+    if (this.watchers.size === 0) return;
+    this.close();
+    this.books.clear();
+    const socket = this.connect(WS_URL);
+    this.socket = socket;
+
+    socket.addEventListener('open', () => {
+      this.attempt = 0;
+      this.lastMessageAt = Date.now();
+      socket.send(JSON.stringify({ type: 'market', assets_ids: this.tokens() }));
+
+      // The venue closes a connection that says nothing. Without this the
+      // socket drops every few tens of seconds, and a basket watched over a
+      // lunch break would spend it reconnecting rather than listening.
+      if (this.ping !== null) clearInterval(this.ping);
+      this.ping = setInterval(() => {
+        if (this.socket !== socket) return;
+        try {
+          socket.send('PING');
+        } catch {
+          // A send on a dying socket; the close handler deals with it.
+        }
+      }, PING_MS);
+    });
+
+    socket.addEventListener('message', (event: MessageEvent) => {
+      if(this.socket!==socket)return;
+      this.lastMessageAt = Date.now();
+      this.ingest(String(event.data));
+    });
+
+    // Only if THIS is still the live socket. Replacing a socket calls close()
+    // on the old one, whose close event would otherwise be indistinguishable
+    // from the venue dropping us — and each phantom drop scheduled another
+    // reconnect, so one watcher produced a reconnect loop.
+    socket.addEventListener('close', () => {
+      if (this.socket === socket) this.retry();
+    });
+    socket.addEventListener('error', () => {
+      if (this.socket === socket) this.retry();
+    });
+  }
+
+  private retry(): void {
+    if (this.watchers.size === 0) return;
+    if(this.retryTimer!==null)return;
+    this.close();
+    for(const w of this.watchers.values())w.notify('stale');
+    const wait = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)] ?? 30_000;
+    this.attempt += 1;
+    this.retryTimer=setTimeout(() => {
+      this.retryTimer=null;
+      if (this.watchers.size === 0) return;
+      // A reconnect re-subscribes, and the venue answers with a full `book` per
+      // token. So the gap closes itself: we never resume from a book that went
+      // stale while we were away, we replace it.
+      this.books.clear();
+      for (const w of this.watchers.values()) w.notify('reconnected');
+      this.open();
+    }, wait);
+  }
+
+  private startStaleClock(): void {
+    this.staleTimer ??= setInterval(() => {
+      if (this.watchers.size === 0 || this.announcedStale) return;
+      if (Date.now() - this.lastMessageAt < STALE_AFTER_MS) return;
+      // Silence is not calm. A quiet socket and a quiet market look identical
+      // from here, so we say which one we cannot tell rather than letting the
+      // last price sit there looking current.
+      this.announcedStale = true;
+      for (const w of this.watchers.values()) w.notify('stale');
+    }, 5_000);
+  }
+
+  private close(): void {
+    if(this.retryTimer!==null){clearTimeout(this.retryTimer);this.retryTimer=null;}
+    if(this.watchers.size===0){this.resubscribe?.cancel();if(this.staleTimer!==null)clearInterval(this.staleTimer);this.staleTimer=null;}
+    if (this.ping !== null) {
+      clearInterval(this.ping);
+      this.ping = null;
+    }
+    if (this.socket === null) return;
+    const socket = this.socket;
+    // Cleared BEFORE close(), so the close event knows this was deliberate.
+    this.socket = null;
+    try {
+      socket.close();
+    } catch {
+      // Closing an already-dead socket is not a failure worth propagating.
+    }
+    if (this.watchers.size === 0 && this.staleTimer !== null) {
+      clearInterval(this.staleTimer);
+      this.staleTimer = null;
+    }
+  }
+
+  /** Exposed for tests: feed a raw frame without a socket. */
+  ingest(raw: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const frames: Frame[] = Array.isArray(parsed) ? (parsed as Frame[]) : [parsed as Frame];
+
+    for (const frame of frames) {
+      if(frame?.event_type==='price_change'&&Array.isArray(frame.price_changes)){
+        const changed=new Map<string,ClobBook>();
+        for(const raw of frame.price_changes){
+          const c=raw as Record<string,unknown>;
+          if(!c||typeof c.asset_id!=='string'||typeof c.price!=='string'||typeof c.size!=='string'||!['BUY','SELL'].includes(String(c.side)))continue;
+          const price=Number(c.price),size=Number(c.size);
+          if(!Number.isFinite(price)||price<0||price>1||!Number.isFinite(size)||size<0)continue;
+          const book=changed.get(c.asset_id)??this.books.get(c.asset_id);
+          if(book)changed.set(c.asset_id,applyChange(book,{price:c.price,size:c.size,side:String(c.side)}));
+        }
+        for(const book of changed.values())this.observe(book);
+        continue;
+      }
+      if (typeof frame?.asset_id !== 'string') continue;
+      const assetId = frame.asset_id;
+
+      if (frame.event_type === 'book') {
+        this.observe(toBook(frame as unknown as BookMessage));
+      } else if (frame.event_type === 'price_change') {
+        const current = this.books.get(assetId);
+        // No tracked book yet means the next `book` frame will establish one.
+        // Guessing from a delta alone would invent depth that was never quoted.
+        if (current === undefined) continue;
+        let next = current;
+        for (const change of (frame as unknown as PriceChangeMessage).changes ?? []) {
+          next = applyChange(next, change);
+        }
+        this.observe(next);
+      } else if (frame.event_type === 'tick_size_change') {
+        const tick = Number((frame as unknown as TickSizeMessage).new_tick_size ?? 0);
+        if (!Number.isFinite(tick) || tick <= 0) continue;
+        // A tick change affects executable prices, so every watcher
+        // of this token is re-priced once rather than silently judged by the
+        // old execution constraints.
+        for (const w of this.watchers.values()) {
+          if (!w.watch.eligibleTokens.includes(assetId)) continue;
+          this.schedule(w.id, 'tick size changed');
+        }
+      }
+    }
+  }
+
+  private observe(next: ClobBook): void {
+    if([...next.asks,...next.bids].some(l=>!Number.isFinite(l.priceMicros)||l.priceMicros<0||l.priceMicros>1_000_000||!Number.isFinite(l.size)||l.size<0))return;
+    next={...next,asks:next.asks.filter(l=>l.size>0),bids:next.bids.filter(l=>l.size>0)};
+    this.announcedStale=false;
+    const previous = this.books.get(next.assetId);
+    this.books.set(next.assetId, next);
+
+    for (const watcher of this.watchers.values()) {
+      if(watcher.watch.eligibleTokens.includes(next.assetId)){
+        watcher.notify('live');
+        if(!previous||previous.asks[0]?.priceMicros!==next.asks[0]?.priceMicros)
+          watcher.marketPrice?.(next.assetId,next.asks[0]?next.asks[0].priceMicros/1_000_000:null,Date.now());
+      }
+      const verdict = assess(watcher.watch, previous, next);
+      if (!verdict.resolve) continue;
+      this.schedule(watcher.id, verdict.reason);
+    }
+  }
+
+  private schedule(id: string, reason: string): void {
+    this.reasons.set(id, reason);
+    let timer = this.pending.get(id);
+    if (timer === undefined) {
+      timer = debounce(() => this.run(id), DEBOUNCE_MS,1500);
+      this.pending.set(id, timer);
+    }
+    timer.fire();
+  }
+
+  private run(id: string): void {
+    if (!this.watchers.has(id)) return;
+    if (this.solving.has(id)||this.inFlight >= MAX_CONCURRENT_SOLVES) {
+      // Queue rather than pile up: an unbounded fan-out of solves on a busy
+      // book would starve the request path that people are actually waiting on.
+      if (!this.queue.includes(id)) this.queue.push(id);
+      return;
+    }
+    const watcher = this.watchers.get(id);
+    if (watcher === undefined) return;
+
+    this.inFlight += 1;
+    this.solving.add(id);
+    const reason = this.reasons.get(id) ?? 'book moved';
+    this.reasons.delete(id);
+
+    void watcher
+      .resolve(reason)
+      .catch(() => {
+        // A failed re-price leaves the last good quote on screen. It is old,
+        // and the stale notice says so; replacing it with an error would throw
+        // away the only usable number the user has.
+      })
+      .finally(() => {
+        this.inFlight -= 1;
+        this.solving.delete(id);
+        const nextId = this.queue.shift();
+        if (nextId !== undefined) this.run(nextId);
+      });
+  }
+
+  /** Exposed for tests and the health check. */
+  get size(): number {
+    return this.watchers.size;
+  }
+}
+
+let shared: MarketFeed | null = null;
+
+export function marketFeed(): MarketFeed {
+  shared ??= new MarketFeed();
+  return shared;
+}

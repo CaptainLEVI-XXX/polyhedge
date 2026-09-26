@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "purpose": "Labelled plain-English exposures, with the answer key a correct intake run should produce for each. Read by evals/run.ts, which is a script and never part of the test suite.",
+  "warning": "EVERY EXAMPLE BELOW IS source: \"seed\". A seed example is one this project wrote — both the text and the key — to demonstrate the format. Seeds measure nothing: a model scored against a key written alongside its own prompts is being measured for self-consistency, and five examples cannot both fit a calibration and demonstrate that it works. No accuracy claim, and no fitted threshold or temperature, may rest on this file until it holds examples whose text and key came from somewhere other than this project. Gathering those is human work and gates this stage.",
+  "schema": {
+    "id": "string. Unique and stable; results are reported per id.",
+    "split": "\"fit\" | \"eval\". \"fit\" may be looked at while tuning thresholds and calibration temperatures. \"eval\" is held out and must not inform any parameter, or it stops being a measurement.",
+    "source": "\"seed\" for an example this project wrote. Anything else names where the text and the key actually came from (e.g. \"user-2026-09\", \"support-transcript\"). run.ts reads this field and refuses to present seed-only results as a measurement.",
+    "text": "string. The user's exposure in their own words, exactly as they would type it. Never cleaned up, never written to suit the parser.",
+    "expect": {
+      "underlying": "\"BTC\" | \"ETH\".",
+      "direction": "\"below\" | \"above\" | \"outside\" | null. null means a correct run never reaches a direction (it declined or asked instead).",
+      "lossUsd": "number | null. Dollars. null means a correct run never places one.",
+      "budgetUsd": "number | null. null means the user named no budget, so nothing should be placed.",
+      "levels": "array of { \"value\": number, \"role\": \"threshold\" | \"range_low\" | \"range_high\" } | null. Order is not scored; roles are.",
+      "templateId": "\"threshold_digital\" | \"range_protect\" | \"linear_strip\" | null. null means a correct run declines rather than picking a shape.",
+      "isHedge": "boolean. Whether this is a risk the user already carries."
+    },
+    "omitted": "A field left out of `expect` is not scored for that example. Absent is not the same as null: null asserts that nothing should be produced."
+  },
+  "examples": [
+    {
+      "id": "btc-threshold-below",
+      "split": "fit",
+      "source": "seed",
+      "text": "I'm holding 2 BTC and I'd be down about $8,000 if it ends below 60k by Dec 31. I can spend $300 on cover.",
+      "expect": {
+        "underlying": "BTC",
+        "direction": "below",
+        "lossUsd": 8000,
+        "budgetUsd": 300,
+        "levels": [{ "value": 60000, "role": "threshold" }],
+        "templateId": "threshold_digital",
+        "isHedge": true
+      }
+    },
+    {
+      "id": "eth-range-protect",
+      "split": "fit",
+      "source": "seed",
+      "text": "I've got ETH and I'm fine as long as it stays between 1,800 and 2,600 by Nov 28. Outside that band I'm out about $5,000 either way.",
+      "expect": {
+        "underlying": "ETH",
+        "direction": "outside",
+        "lossUsd": 5000,
+        "budgetUsd": null,
+        "levels": [
+          { "value": 1800, "role": "range_low" },
+          { "value": 2600, "role": "range_high" }
+        ],
+        "templateId": "range_protect",
+        "isHedge": true
+      }
+    },
+    {
+      "id": "btc-tail-only",
+      "split": "fit",
+      "source": "seed",
+      "text": "I hold 5 BTC and I can live with an ordinary pullback. What I can't take is a crash: if it ends under 40k by Dec 31 I'm down $120,000. I'd rather not spend more than $2,000 covering that.",
+      "expect": {
+        "underlying": "BTC",
+        "direction": "below",
+        "lossUsd": 120000,
+        "budgetUsd": 2000,
+        "levels": [{ "value": 40000, "role": "threshold" }],
+        "templateId": "threshold_digital",
+        "isHedge": true
+      }
+    },
+    {
+      "id": "eth-short-above",
+      "split": "eval",
+      "source": "seed",
+      "text": "I'm short ETH against a client position, so I lose money if it ends above 3,000 by Oct 31 — call it $12,000 of pain.",
+      "expect": {
+        "underlying": "ETH",
+        "direction": "above",
+        "lossUsd": 12000,
+        "budgetUsd": null,
+        "levels": [{ "value": 3000, "role": "threshold" }],
+        "templateId": "threshold_digital",
+        "isHedge": true
+      }
+    },
+    {
+      "id": "btc-speculative-decline",
+      "split": "eval",
+      "source": "seed",
+      "text": "I don't own any bitcoin but I reckon it's going to 100k by Dec 31 and I'd like to make $5,000 if it does.",
+      "expect": {
+        "underlying": "BTC",
+        "direction": null,
+        "lossUsd": null,
+        "budgetUsd": null,
+        "levels": null,
+        "templateId": null,
+        "isHedge": false
+      }
+    }
+  ]
+}

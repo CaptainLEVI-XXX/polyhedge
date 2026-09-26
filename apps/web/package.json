@@ -1,0 +1,28 @@
+{
+  "name": "@polyhedge/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.mjs dev",
+    "build": "next build",
+    "start": "node scripts/serve.mjs start",
+    "catalogue": "node --import tsx scripts/catalogue-worker.ts"
+  },
+  "dependencies": {
+    "@polyhedge/core": "workspace:*",
+    "@polyhedge/engine": "workspace:*",
+    "@polyhedge/intake": "workspace:*",
+    "@polyhedge/questions": "workspace:*",
+    "@polyhedge/venue": "workspace:*",
+    "@privy-io/react-auth": "^3.44.0",
+    "highs": "^1.15.3",
+    "next": "^15.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@polyhedge/execution",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@polyhedge/engine": "workspace:*",
+    "@polyhedge/venue": "workspace:*",
+    "pg": "8.23.0",
+    "@polymarket/client": "0.10.0",
+    "viem": "^2.37.0"
+  }
+}
