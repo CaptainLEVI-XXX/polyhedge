@@ -58,13 +58,28 @@ export interface LpSolution {
 }
 
 let highsPromise: Promise<LegacyHighs> | null = null;
-function highs() { highsPromise ??= loadHighs(); return highsPromise; }
-
 export async function solveLp(model: LpModel, phaseName = 'unknown'): Promise<LpSolution> {
-  const h = await highs();
-  const result = h.solve(model.text, { ...SOLVER_OPTIONS,
-    ...(model.mixedInteger ? { solver: 'choose' as const, presolve: 'on' as const,
-      mip_rel_gap: 0, mip_abs_gap: 1e-8, time_limit: 2 } : {}) });
+  let result: ReturnType<LegacyHighs['solve']>;
+  for (;;) {
+    const pending = highsPromise ??= loadHighs();
+    try {
+      const h = await pending;
+      // Another queued solve may have aborted this runtime while we awaited it.
+      if (pending !== highsPromise) continue;
+      result = h.solve(model.text, { ...SOLVER_OPTIONS,
+        ...(model.mixedInteger ? { solver: 'choose' as const, presolve: 'on' as const,
+          mip_rel_gap: 0, mip_abs_gap: 1e-8, time_limit: 2 } : {}) });
+      break;
+    } catch (error) {
+      // A WASM abort leaves the cached module unusable. Reject this quote, but
+      // let subsequent candidates/requests initialize a healthy runtime.
+      // Ordinary nonoptimal statuses below do not invalidate the module.
+      if (highsPromise === pending) highsPromise = null;
+      console.warn('[solver] runtime discarded', { phase: phaseName, modelHash: model.hash,
+        error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
 
   const status = String(result.Status);
   if (status !== 'Optimal') throw new LpNotOptimalError(status, phaseName);
